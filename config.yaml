@@ -1,0 +1,53 @@
+# quant-research-vault configuration
+
+vault_path: "C:/Users/heiwa/Documents/ClaudeVault"
+research_dir: "research"          # subfolder inside vault
+db_path: ".db/papers.sqlite"      # local tracking DB
+chroma_path: ".db/chroma"         # vector index
+
+# arXiv categories to monitor
+categories:
+  - q-fin.PM   # Portfolio Management
+  - q-fin.TR   # Trading & Market Microstructure
+  - q-fin.ST   # Statistical Finance
+  - q-fin.RM   # Risk Management
+  - q-fin.CP   # Computational Finance
+  - q-fin.MF   # Mathematical Finance
+
+# Broad ML/CS categories — filtered by keywords below
+ml_categories:
+  - stat.ML
+  - cs.LG
+
+# Keywords required for ml_categories papers (any match = include)
+ml_keywords:
+  - portfolio
+  - trading
+  - stock return
+  - asset pricing
+  - factor model
+  - volatility
+  - regime
+  - microstructure
+  - cryptocurrency
+  - crypto
+  - high frequency
+  - risk premium
+  - alpha
+  - momentum
+  - mean reversion
+  - pairs trading
+  - market making
+  - order book
+
+# Fetch settings
+max_papers_per_run: 30
+days_lookback: 14              # how many days back to look for new papers
+fetch_pdf: true                # download and process full PDF
+
+# Summarization
+claude_model: "claude-haiku-4-5-20251001"
+max_pdf_chars: 12000           # truncate PDF text before sending to Claude
+
+# MCP server
+mcp_server_name: "quant-research"
