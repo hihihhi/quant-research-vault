@@ -1,7 +1,8 @@
 arxiv>=2.1.0
 pdfplumber>=0.11.0
-anthropic>=0.40.0
 chromadb>=0.5.0
 mcp[cli]>=1.0.0
 PyYAML>=6.0
 requests>=2.31.0
+# Optional: only needed if not using `claude` CLI (Max plan)
+# anthropic>=0.40.0

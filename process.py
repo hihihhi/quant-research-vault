@@ -16,12 +16,18 @@ Usage:
 
 import argparse
 import io
+import os
+import shutil
 import sqlite3
+import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
 
-import anthropic
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import pdfplumber
 import requests
 import yaml
@@ -139,18 +145,51 @@ def extract_text(pdf_bytes: bytes, max_chars: int) -> str:
 
 # ── Summarization ─────────────────────────────────────────────────────────────
 
-def summarize(paper: dict, text: str, cfg: dict) -> str:
+def _summarize_via_cli(prompt: str, model: str) -> str:
+    """Use the `claude` CLI (Max plan OAuth) — no API key required.
+    Passes prompt via stdin to avoid Windows 8191-char command-line limit.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        raise RuntimeError("claude CLI not found in PATH")
+    result = subprocess.run(
+        [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
+        input=prompt,
+        capture_output=True, text=True, timeout=180,
+        encoding="utf-8", errors="replace",
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude CLI error: {result.stderr[:300]}")
+    return result.stdout.strip()
+
+
+def _summarize_via_api(prompt: str, model: str) -> str:
+    """Use ANTHROPIC_API_KEY if set — fallback / CI use."""
+    import anthropic
     client = anthropic.Anthropic()
-
-    # If PDF extraction failed, fall back to abstract only
-    source_text = text if text.strip() else f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
-
     msg = client.messages.create(
-        model=cfg["claude_model"],
+        model=model,
         max_tokens=2000,
-        messages=[{"role": "user", "content": SUMMARY_PROMPT.format(text=source_text)}],
+        messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text
+
+
+def summarize(paper: dict, text: str, cfg: dict) -> str:
+    source_text = text if text.strip() else f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
+    prompt = SUMMARY_PROMPT.format(text=source_text)
+    model = cfg["claude_model"]
+
+    # Prefer claude CLI (Max plan) over API key
+    if shutil.which("claude"):
+        return _summarize_via_cli(prompt, model)
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        return _summarize_via_api(prompt, model)
+    else:
+        raise RuntimeError(
+            "No Claude auth available. Either install claude CLI (Max plan) "
+            "or set ANTHROPIC_API_KEY environment variable."
+        )
 
 
 # ── Markdown output ───────────────────────────────────────────────────────────
