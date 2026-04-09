@@ -51,3 +51,16 @@ max_pdf_chars: 12000           # truncate PDF text before sending to Claude
 
 # MCP server
 mcp_server_name: "quant-research"
+
+# Extra paper sources (arXiv covers ~40% of quant research; SSRN/journals have the rest)
+# Set enabled: true to activate. These only add papers NOT already in arXiv.
+extra_sources:
+  openalex:
+    enabled: false          # integrated into --all-history windowed fetch
+    mailto: ""              # optional: your email for OpenAlex polite pool (10x rate limit)
+    max_per_window: 300     # max papers per 3-month window from this source
+  semantic_scholar:
+    enabled: false          # run separately: python fetch.py --fetch-ss
+    api_key: ""             # optional: free key from semanticscholar.org/product/api
+    query: "quantitative finance trading portfolio risk alpha momentum cryptocurrency"
+    max_results: 10000      # total papers to import in one --fetch-ss run

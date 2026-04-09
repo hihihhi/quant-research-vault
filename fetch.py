@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 import arxiv
+import requests
 import yaml
 
 # Windows terminals may use cp950/cp1252 — force UTF-8 output
@@ -170,6 +171,262 @@ def _iter_with_retry(client: arxiv.Client, search: arxiv.Search, max_retries: in
     raise RuntimeError(f"Giving up after {max_retries} retries")
 
 
+def _invert_abstract(inv_index: dict) -> str:
+    """Reconstruct abstract from OpenAlex inverted index {word: [positions]}."""
+    if not inv_index:
+        return ""
+    pairs = []
+    for word, positions in inv_index.items():
+        for pos in positions:
+            pairs.append((pos, word))
+    pairs.sort()
+    return " ".join(w for _, w in pairs)
+
+
+def _openalex_to_cat(concepts: list) -> str:
+    """Map OpenAlex top concept to q-fin category."""
+    name = (concepts[0].get("display_name", "") if concepts else "").lower()
+    if any(x in name for x in ("portfolio", "asset pricing", "fund")):
+        return "q-fin.PM"
+    if any(x in name for x in ("trading", "microstructure", "market making", "order")):
+        return "q-fin.TR"
+    if any(x in name for x in ("risk",)):
+        return "q-fin.RM"
+    if any(x in name for x in ("stochastic", "volatility", "statistical")):
+        return "q-fin.ST"
+    if any(x in name for x in ("computational", "numerical", "simulation")):
+        return "q-fin.CP"
+    return "q-fin.GN"
+
+
+def fetch_openalex_window(cfg: dict, window_start=None, window_end=None) -> list[dict]:
+    """Fetch non-arXiv papers from OpenAlex (covers SSRN, journals, working papers)."""
+    oa_cfg = (cfg.get("extra_sources") or {}).get("openalex", {})
+    if not oa_cfg.get("enabled", False):
+        return []
+
+    import time as _time
+
+    mailto = oa_cfg.get("mailto", "")
+    max_results = oa_cfg.get("max_per_window", 300)
+
+    # Build filter
+    filters = ["has_abstract:true", "is_paratext:false", "type:article"]
+    if window_start:
+        filters.append(f"from_publication_date:{window_start.isoformat()}")
+    if window_end:
+        filters.append(f"to_publication_date:{window_end.isoformat()}")
+
+    # Finance + quant keywords search
+    search_terms = " ".join(cfg.get("ml_keywords", [
+        "portfolio", "trading", "volatility", "momentum", "alpha", "cryptocurrency",
+    ])[:12])
+
+    params = {
+        "search": search_terms,
+        "filter": ",".join(filters),
+        "select": "id,title,abstract_inverted_index,authorships,publication_date,ids,open_access,primary_location,concepts",
+        "per-page": 200,
+        "cursor": "*",
+        "sort": "publication_date:desc",
+    }
+    if mailto:
+        params["mailto"] = mailto
+
+    ua = "quant-research-vault/1.0 (mailto:{}) OpenAlex".format(mailto or "anonymous")
+    results = []
+    seen_ids: set[str] = set()
+
+    while len(results) < max_results:
+        try:
+            r = requests.get(
+                "https://api.openalex.org/works",
+                params=params,
+                headers={"User-Agent": ua},
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            print(f"  [openalex] error: {e}", flush=True)
+            break
+
+        works = data.get("results") or []
+        if not works:
+            break
+
+        for work in works:
+            # Skip if paper has an arXiv ID — arXiv fetch already covers it
+            ext_ids = work.get("ids") or {}
+            if ext_ids.get("arxiv"):
+                continue
+
+            # Build synthetic ID from OpenAlex work ID
+            oa_id = (work.get("id") or "").split("works/")[-1]
+            if not oa_id:
+                continue
+            paper_id = f"oa:{oa_id}"
+            if paper_id in seen_ids:
+                continue
+            seen_ids.add(paper_id)
+
+            abstract = _invert_abstract(work.get("abstract_inverted_index") or {})
+            if not abstract or len(abstract) < 80:
+                continue
+
+            title = (work.get("title") or "").strip()
+            if not title:
+                continue
+
+            authors = [
+                (a.get("author") or {}).get("display_name", "")
+                for a in (work.get("authorships") or [])[:5]
+            ]
+            authors = [a for a in authors if a]
+
+            concepts = work.get("concepts") or []
+            categories = [_openalex_to_cat(concepts)]
+
+            oa = work.get("open_access") or {}
+            pdf_url = oa.get("oa_url") or ""
+            if not pdf_url:
+                loc = work.get("primary_location") or {}
+                pdf_url = loc.get("pdf_url") or loc.get("landing_page_url") or ""
+
+            pub_date = (work.get("publication_date") or "2000-01-01")[:10]
+
+            results.append({
+                "arxiv_id": paper_id,
+                "title": title,
+                "authors": authors,
+                "abstract": abstract,
+                "categories": categories,
+                "published": pub_date + "T00:00:00+00:00",
+                "pdf_url": pdf_url,
+            })
+
+            if len(results) >= max_results:
+                break
+
+        next_cursor = (data.get("meta") or {}).get("next_cursor")
+        if not next_cursor:
+            break
+        params["cursor"] = next_cursor
+        _time.sleep(0.5)
+
+    return results
+
+
+def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
+    """One-time bulk import from Semantic Scholar (use --fetch-ss flag).
+    Fetches finance papers not on arXiv. Slower — use once, not in windowed loop.
+    """
+    ss_cfg = (cfg.get("extra_sources") or {}).get("semantic_scholar", {})
+    if not ss_cfg.get("enabled", False):
+        print("[semantic_scholar] disabled in config (set extra_sources.semantic_scholar.enabled: true)")
+        return []
+
+    import time as _time
+
+    api_key = ss_cfg.get("api_key", "")
+    query = ss_cfg.get("query", "quantitative finance trading portfolio")
+    max_results = ss_cfg.get("max_results", 5000)
+    sleep_secs = 1.1 if api_key else 3.1  # free tier: 100 req/5min
+
+    headers = {"User-Agent": "quant-research-vault/1.0"}
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    fields = "paperId,title,abstract,authors,year,publicationDate,externalIds,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy"
+
+    results = []
+    seen_ids: set[str] = set()
+    offset = 0
+    limit = 100
+
+    print(f"[semantic_scholar] Fetching up to {max_results} finance papers (non-arXiv only)...", flush=True)
+
+    while len(results) < max_results:
+        try:
+            r = requests.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={"query": query, "fields": fields, "limit": limit, "offset": offset},
+                headers=headers,
+                timeout=30,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            print(f"  [semantic_scholar] error at offset {offset}: {e}", flush=True)
+            _time.sleep(10)
+            break
+
+        papers = data.get("data") or []
+        if not papers:
+            break
+
+        for p in papers:
+            ext = p.get("externalIds") or {}
+            # Skip if arXiv ID exists — arXiv fetch covers it
+            if ext.get("ArXiv"):
+                continue
+
+            ss_id = p.get("paperId", "")
+            if not ss_id:
+                continue
+            paper_id = f"ss:{ss_id}"
+            if paper_id in seen_ids:
+                continue
+            seen_ids.add(paper_id)
+
+            abstract = (p.get("abstract") or "").strip()
+            if not abstract or len(abstract) < 80:
+                continue
+
+            title = (p.get("title") or "").strip()
+            if not title:
+                continue
+
+            authors = [(a.get("name") or "") for a in (p.get("authors") or [])[:5]]
+            authors = [a for a in authors if a]
+
+            fos = [f.get("category", "") for f in (p.get("s2FieldsOfStudy") or [])]
+            if not any(f in ("Economics", "Finance", "Business") for f in fos):
+                continue  # filter to finance-adjacent papers only
+
+            oa = p.get("openAccessPdf") or {}
+            pdf_url = oa.get("url", "")
+
+            pub_date = p.get("publicationDate") or f"{p.get('year', 2000)}-01-01"
+            if len(pub_date) == 4:
+                pub_date += "-01-01"
+
+            results.append({
+                "arxiv_id": paper_id,
+                "title": title,
+                "authors": authors,
+                "abstract": abstract,
+                "categories": ["q-fin.GN"],
+                "published": pub_date[:10] + "T00:00:00+00:00",
+                "pdf_url": pdf_url,
+            })
+
+            if len(results) % 500 == 0:
+                print(f"  [semantic_scholar] {len(results)} papers so far...", flush=True)
+
+            if len(results) >= max_results:
+                break
+
+        offset += limit
+        total_available = data.get("total", 0)
+        if offset >= min(total_available, max_results * 3):
+            break
+        _time.sleep(sleep_secs)
+
+    print(f"  [semantic_scholar] Done: {len(results)} non-arXiv papers found.", flush=True)
+    return results
+
+
 def fetch_window(cfg: dict, window_start: date | None = None, window_end: date | None = None,
                  max_per_query: int = 2000) -> list[dict]:
     """Fetch papers in a specific date window (or all if no window given)."""
@@ -214,6 +471,17 @@ def fetch_window(cfg: dict, window_start: date | None = None, window_end: date |
                 ml_count += 1
                 if ml_count % 100 == 0:
                     print(f"  [ml] {ml_count} relevant ML papers...", flush=True)
+
+    # ── Extra sources (OpenAlex/SSRN) ──────────────────────────────────────────
+    oa_papers = fetch_openalex_window(cfg, window_start, window_end)
+    oa_new = 0
+    for p in oa_papers:
+        if p["arxiv_id"] not in seen:
+            seen.add(p["arxiv_id"])
+            results.append(p)
+            oa_new += 1
+    if oa_new:
+        print(f"  [openalex] +{oa_new} non-arXiv papers", flush=True)
 
     return results
 
@@ -271,10 +539,23 @@ def main() -> int:
     parser.add_argument("--window-start", help="Specific window start YYYYMMDD")
     parser.add_argument("--window-end", help="Specific window end YYYYMMDD")
     parser.add_argument("--dry-run", action="store_true", help="Print without saving")
+    parser.add_argument("--fetch-ss", action="store_true",
+                        help="One-time bulk import from Semantic Scholar (non-arXiv papers)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     conn = init_db(cfg["db_path"])
+
+    if args.fetch_ss:
+        papers = fetch_semantic_scholar_bulk(cfg)
+        new_count = 0
+        for p in papers:
+            if not already_fetched(conn, p["arxiv_id"]):
+                save_paper(conn, p)
+                new_count += 1
+        print(f"\nSemantic Scholar import: {new_count} new papers added. DB total: {count_total(conn)}")
+        conn.close()
+        return 0
 
     if args.all_history:
         # Date-range chunked fetch — bypasses arXiv's 10k offset limit
