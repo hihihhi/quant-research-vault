@@ -13,7 +13,11 @@ Usage:
 import argparse
 import json
 import sqlite3
+import sys
 from pathlib import Path
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import chromadb
 import yaml
