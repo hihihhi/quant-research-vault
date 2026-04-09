@@ -112,11 +112,17 @@ def matches_keywords(paper: arxiv.Result, keywords: list[str]) -> bool:
     return any(kw.lower() in text for kw in keywords)
 
 
-def fetch_papers(cfg: dict, days_override: int | None = None) -> list[dict]:
-    days = days_override or cfg["days_lookback"]
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+def fetch_papers(cfg: dict, days_override: int | None = None, all_history: bool = False) -> list[dict]:
+    cutoff = None
+    if not all_history:
+        days = days_override or cfg["days_lookback"]
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    client = arxiv.Client(page_size=100, delay_seconds=3, num_retries=3)
+    # All-history mode uses much larger result caps
+    max_per_cat = 50_000 if all_history else cfg["max_papers_per_run"]
+    max_ml = 100_000 if all_history else cfg["max_papers_per_run"] * 3
+
+    client = arxiv.Client(page_size=500, delay_seconds=3, num_retries=5)
     results: list[dict] = []
 
     # Regular quant-fin categories
@@ -124,29 +130,35 @@ def fetch_papers(cfg: dict, days_override: int | None = None) -> list[dict]:
         query = build_query(cfg["categories"])
         search = arxiv.Search(
             query=query,
-            max_results=cfg["max_papers_per_run"],
+            max_results=max_per_cat,
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
         for r in client.results(search):
-            if r.published < cutoff:
+            if cutoff and r.published < cutoff:
                 break
             results.append(_to_dict(r))
+            if len(results) % 500 == 0:
+                print(f"  ... fetched {len(results)} q-fin papers so far")
 
     # ML categories — keyword filtered
     if cfg.get("ml_categories") and cfg.get("ml_keywords"):
+        ml_count = 0
         query = build_query(cfg["ml_categories"])
         search = arxiv.Search(
             query=query,
-            max_results=cfg["max_papers_per_run"] * 3,  # fetch more, filter down
+            max_results=max_ml,
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
         for r in client.results(search):
-            if r.published < cutoff:
+            if cutoff and r.published < cutoff:
                 break
             if matches_keywords(r, cfg["ml_keywords"]):
                 results.append(_to_dict(r))
+                ml_count += 1
+                if ml_count % 500 == 0:
+                    print(f"  ... fetched {ml_count} ML papers so far")
 
     # Deduplicate by arxiv_id
     seen: set[str] = set()
@@ -177,14 +189,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch quant finance papers from arXiv")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--days", type=int, help="Override days_lookback")
+    parser.add_argument("--all-history", action="store_true", help="Fetch entire arXiv history (no date cutoff)")
     parser.add_argument("--dry-run", action="store_true", help="Print without saving")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     conn = init_db(cfg["db_path"])
 
-    print(f"Fetching papers (last {args.days or cfg['days_lookback']} days)...")
-    papers = fetch_papers(cfg, days_override=args.days)
+    if args.all_history:
+        print("Fetching ALL history from arXiv (no date cutoff). This may take 30-60 min...")
+    else:
+        print(f"Fetching papers (last {args.days or cfg['days_lookback']} days)...")
+    papers = fetch_papers(cfg, days_override=args.days, all_history=args.all_history)
     print(f"Found {len(papers)} papers from arXiv")
 
     new_count = 0
