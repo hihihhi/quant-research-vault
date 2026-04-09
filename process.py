@@ -313,9 +313,26 @@ def vault_file_path(paper: dict, vault_path: str, research_dir: str) -> Path:
 
 _print_lock = threading.Lock()
 
+def _is_fully_analyzed(vault_path: str) -> bool:
+    """Check if a vault file already has full Claude analysis (not just abstract)."""
+    try:
+        content = Path(vault_path).read_text(encoding="utf-8", errors="replace")
+        return "## Signal" in content or "## Construction" in content
+    except Exception:
+        return False
+
+
 def _process_one(paper: dict, cfg: dict, abstract_only: bool,
                  conn: sqlite3.Connection, counter: list) -> bool:
     try:
+        out_path = vault_file_path(paper, cfg["vault_path"], cfg["research_dir"])
+
+        # Skip Phase 2 if already fully analyzed (safe to restart without re-processing)
+        if not abstract_only and out_path.exists() and _is_fully_analyzed(str(out_path)):
+            with _print_lock:
+                counter[0] += 1
+            return True
+
         if abstract_only:
             markdown = build_abstract_entry(paper)
         else:
@@ -327,7 +344,6 @@ def _process_one(paper: dict, cfg: dict, abstract_only: bool,
             summary = summarize(paper, pdf_text, cfg)
             markdown = build_full_entry(paper, summary)
 
-        out_path = vault_file_path(paper, cfg["vault_path"], cfg["research_dir"])
         out_path.write_text(markdown, encoding="utf-8")
         mark_processed(conn, paper["arxiv_id"], str(out_path))
 
