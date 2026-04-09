@@ -85,16 +85,22 @@ def main() -> None:
 
     # ── All-history mode: chunk-by-chunk fetch → process → sync ───────────────
     if args.all_history:
-        start_date = date(1993, 1, 1)
+        # q-fin categories started in 1997; skip empty years before that
+        start_date = date(1997, 1, 1)
         end_date = date.today()
         windows = date_windows(start_date, end_date, chunk_months=3)
         print(f"All-history pipeline: {len(windows)} quarterly windows ({start_date} to {end_date})")
         print("Each window: fetch -> process -> sync\n")
 
+        import time as _time
         for i, (w_start, w_end) in enumerate(windows, 1):
             print(f"\n{'#'*60}", flush=True)
             print(f"# Chunk {i}/{len(windows)}: {w_start} -> {w_end}", flush=True)
             print(f"{'#'*60}", flush=True)
+
+            # Polite delay between chunks (arXiv rate limit: be gentle)
+            if i > 1:
+                _time.sleep(20)
 
             # 1. Fetch this window
             fetch_args = config_args + [
@@ -103,7 +109,8 @@ def main() -> None:
             ]
             rc = run_step("fetch.py", fetch_args)
             if rc != 0:
-                print(f"Fetch failed for chunk {i}. Skipping process/sync.", flush=True)
+                print(f"Fetch failed for chunk {i}. Waiting 120s then continuing...", flush=True)
+                _time.sleep(120)
                 continue
 
             total, pending = count_db(cfg["db_path"])
