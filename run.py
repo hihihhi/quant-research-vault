@@ -78,7 +78,9 @@ def main() -> None:
     parser.add_argument("--all-history", action="store_true",
                         help="Fetch entire arXiv history chunk by chunk, process+sync each chunk")
     parser.add_argument("--abstract-only", action="store_true",
-                        help="Use abstract-only mode for processing (fast, no PDF/Claude). Recommended for --all-history")
+                        help="Phase 1: fast index via abstracts only (no PDF/Claude)")
+    parser.add_argument("--workers", type=int, default=3,
+                        help="Parallel workers for Claude summarization (default 3)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -126,6 +128,8 @@ def main() -> None:
             process_args = config_args + ["--limit", str(args.limit or 500)]
             if args.abstract_only:
                 process_args.append("--abstract-only")
+            else:
+                process_args += ["--workers", str(args.workers)]
             rc = run_step("process.py", process_args)
             if rc != 0:
                 print(f"Process step failed for chunk {i}.", flush=True)
