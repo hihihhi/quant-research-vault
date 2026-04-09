@@ -71,7 +71,7 @@ def main() -> None:
             print(f"\nSync failed (exit {rc}). Stopping.")
             sys.exit(rc)
 
-    print("\n✓ Pipeline complete.")
+    print("\nPipeline complete.")
 
 
 if __name__ == "__main__":
