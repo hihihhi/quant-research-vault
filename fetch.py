@@ -148,10 +148,30 @@ def _to_dict(r: arxiv.Result) -> dict:
     }
 
 
+def _iter_with_retry(client: arxiv.Client, search: arxiv.Search, max_retries: int = 4) -> list[arxiv.Result]:
+    """Iterate results with retry + backoff on HTTP 429/500."""
+    import time
+    for attempt in range(max_retries):
+        try:
+            return list(client.results(search))
+        except arxiv.HTTPError as e:
+            if e.status == 429:
+                wait = 60 * (2 ** attempt)  # 60s, 120s, 240s, 480s
+                print(f"  Rate limited (429). Waiting {wait}s before retry {attempt+1}/{max_retries}...", flush=True)
+                time.sleep(wait)
+            elif e.status == 500:
+                wait = 30 * (attempt + 1)
+                print(f"  Server error (500). Waiting {wait}s before retry {attempt+1}/{max_retries}...", flush=True)
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError(f"Giving up after {max_retries} retries")
+
+
 def fetch_window(cfg: dict, window_start: date | None = None, window_end: date | None = None,
                  max_per_query: int = 2000) -> list[dict]:
     """Fetch papers in a specific date window (or all if no window given)."""
-    client = arxiv.Client(page_size=200, delay_seconds=3, num_retries=5)
+    client = arxiv.Client(page_size=100, delay_seconds=5, num_retries=3)
     results: list[dict] = []
     seen: set[str] = set()
 
@@ -164,7 +184,7 @@ def fetch_window(cfg: dict, window_start: date | None = None, window_end: date |
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
-        for r in client.results(search):
+        for r in _iter_with_retry(client, search):
             pid = r.entry_id.split("/abs/")[-1]
             if pid not in seen:
                 seen.add(pid)
@@ -174,6 +194,8 @@ def fetch_window(cfg: dict, window_start: date | None = None, window_end: date |
 
     # ML categories — keyword filtered
     if cfg.get("ml_categories") and cfg.get("ml_keywords"):
+        import time
+        time.sleep(5)  # brief pause between category queries
         ml_count = 0
         query = build_query(cfg["ml_categories"], window_start, window_end)
         search = arxiv.Search(
@@ -182,7 +204,7 @@ def fetch_window(cfg: dict, window_start: date | None = None, window_end: date |
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
-        for r in client.results(search):
+        for r in _iter_with_retry(client, search):
             pid = r.entry_id.split("/abs/")[-1]
             if pid not in seen and matches_keywords(r, cfg["ml_keywords"]):
                 seen.add(pid)
