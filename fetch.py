@@ -15,11 +15,16 @@ Usage:
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import arxiv
 import yaml
+
+# Windows terminals may use cp950/cp1252 — force UTF-8 output
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
