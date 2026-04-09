@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """
-fetch.py — Pull new quant finance papers from arXiv.
-
-Queries configured categories, filters ml_categories by keywords,
-and stores paper metadata in SQLite. Returns only papers not yet processed.
+fetch.py — Pull quant finance papers from arXiv.
 
 Usage:
-    python fetch.py                  # use config.yaml
-    python fetch.py --config other.yaml
-    python fetch.py --days 7         # override lookback days
-    python fetch.py --dry-run        # print papers without saving
+    python fetch.py                         # use config.yaml (14-day window)
+    python fetch.py --days 7                # override lookback days
+    python fetch.py --all-history           # fetch ALL papers (date-range chunks)
+    python fetch.py --window-start 20200101 --window-end 20200401  # specific window
+    python fetch.py --dry-run               # print papers without saving
 """
 
 import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 import arxiv
@@ -100,11 +98,37 @@ def get_unprocessed(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def count_total(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+
+
+# ── Date window generation ────────────────────────────────────────────────────
+
+def date_windows(start: date, end: date, chunk_months: int = 3) -> list[tuple[date, date]]:
+    """Split [start, end] into chunks of ~chunk_months months."""
+    windows = []
+    cur = start
+    while cur < end:
+        month = cur.month - 1 + chunk_months
+        year = cur.year + month // 12
+        month = month % 12 + 1
+        nxt = date(year, month, 1)
+        if nxt > end:
+            nxt = end
+        windows.append((cur, nxt))
+        cur = nxt
+    return windows
+
+
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
-def build_query(categories: list[str]) -> str:
-    parts = [f"cat:{c}" for c in categories]
-    return " OR ".join(parts)
+def build_query(categories: list[str], window_start: date | None = None, window_end: date | None = None) -> str:
+    cat_part = " OR ".join(f"cat:{c}" for c in categories)
+    if window_start and window_end:
+        d_start = window_start.strftime("%Y%m%d")
+        d_end = window_end.strftime("%Y%m%d")
+        return f"({cat_part}) AND submittedDate:[{d_start} TO {d_end}]"
+    return cat_part
 
 
 def matches_keywords(paper: arxiv.Result, keywords: list[str]) -> bool:
@@ -112,70 +136,11 @@ def matches_keywords(paper: arxiv.Result, keywords: list[str]) -> bool:
     return any(kw.lower() in text for kw in keywords)
 
 
-def fetch_papers(cfg: dict, days_override: int | None = None, all_history: bool = False) -> list[dict]:
-    cutoff = None
-    if not all_history:
-        days = days_override or cfg["days_lookback"]
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-    # All-history mode uses much larger result caps
-    max_per_cat = 50_000 if all_history else cfg["max_papers_per_run"]
-    max_ml = 100_000 if all_history else cfg["max_papers_per_run"] * 3
-
-    client = arxiv.Client(page_size=500, delay_seconds=3, num_retries=5)
-    results: list[dict] = []
-
-    # Regular quant-fin categories
-    if cfg.get("categories"):
-        query = build_query(cfg["categories"])
-        search = arxiv.Search(
-            query=query,
-            max_results=max_per_cat,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
-        for r in client.results(search):
-            if cutoff and r.published < cutoff:
-                break
-            results.append(_to_dict(r))
-            if len(results) % 500 == 0:
-                print(f"  ... fetched {len(results)} q-fin papers so far")
-
-    # ML categories — keyword filtered
-    if cfg.get("ml_categories") and cfg.get("ml_keywords"):
-        ml_count = 0
-        query = build_query(cfg["ml_categories"])
-        search = arxiv.Search(
-            query=query,
-            max_results=max_ml,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
-        for r in client.results(search):
-            if cutoff and r.published < cutoff:
-                break
-            if matches_keywords(r, cfg["ml_keywords"]):
-                results.append(_to_dict(r))
-                ml_count += 1
-                if ml_count % 500 == 0:
-                    print(f"  ... fetched {ml_count} ML papers so far")
-
-    # Deduplicate by arxiv_id
-    seen: set[str] = set()
-    unique = []
-    for p in results:
-        if p["arxiv_id"] not in seen:
-            seen.add(p["arxiv_id"])
-            unique.append(p)
-
-    return unique
-
-
 def _to_dict(r: arxiv.Result) -> dict:
     return {
         "arxiv_id": r.entry_id.split("/abs/")[-1],
         "title": r.title.strip(),
-        "authors": [a.name for a in r.authors[:5]],  # cap at 5
+        "authors": [a.name for a in r.authors[:5]],
         "abstract": r.summary.strip(),
         "categories": r.categories,
         "published": r.published.isoformat(),
@@ -183,13 +148,104 @@ def _to_dict(r: arxiv.Result) -> dict:
     }
 
 
+def fetch_window(cfg: dict, window_start: date | None = None, window_end: date | None = None,
+                 max_per_query: int = 2000) -> list[dict]:
+    """Fetch papers in a specific date window (or all if no window given)."""
+    client = arxiv.Client(page_size=200, delay_seconds=3, num_retries=5)
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    # Regular quant-fin categories
+    if cfg.get("categories"):
+        query = build_query(cfg["categories"], window_start, window_end)
+        search = arxiv.Search(
+            query=query,
+            max_results=max_per_query,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+        for r in client.results(search):
+            pid = r.entry_id.split("/abs/")[-1]
+            if pid not in seen:
+                seen.add(pid)
+                results.append(_to_dict(r))
+                if len(results) % 100 == 0:
+                    print(f"  [q-fin] {len(results)} papers...", flush=True)
+
+    # ML categories — keyword filtered
+    if cfg.get("ml_categories") and cfg.get("ml_keywords"):
+        ml_count = 0
+        query = build_query(cfg["ml_categories"], window_start, window_end)
+        search = arxiv.Search(
+            query=query,
+            max_results=max_per_query,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+        for r in client.results(search):
+            pid = r.entry_id.split("/abs/")[-1]
+            if pid not in seen and matches_keywords(r, cfg["ml_keywords"]):
+                seen.add(pid)
+                results.append(_to_dict(r))
+                ml_count += 1
+                if ml_count % 100 == 0:
+                    print(f"  [ml] {ml_count} relevant ML papers...", flush=True)
+
+    return results
+
+
+def fetch_recent(cfg: dict, days_override: int | None = None) -> list[dict]:
+    """Fetch papers from the last N days (normal mode)."""
+    days = days_override or cfg["days_lookback"]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    client = arxiv.Client(page_size=200, delay_seconds=3, num_retries=5)
+    results: list[dict] = []
+    seen: set[str] = set()
+
+    if cfg.get("categories"):
+        query = " OR ".join(f"cat:{c}" for c in cfg["categories"])
+        search = arxiv.Search(
+            query=query,
+            max_results=cfg["max_papers_per_run"],
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+        for r in client.results(search):
+            if r.published < cutoff:
+                break
+            pid = r.entry_id.split("/abs/")[-1]
+            if pid not in seen:
+                seen.add(pid)
+                results.append(_to_dict(r))
+
+    if cfg.get("ml_categories") and cfg.get("ml_keywords"):
+        query = " OR ".join(f"cat:{c}" for c in cfg["ml_categories"])
+        search = arxiv.Search(
+            query=query,
+            max_results=cfg["max_papers_per_run"] * 3,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+        for r in client.results(search):
+            if r.published < cutoff:
+                break
+            pid = r.entry_id.split("/abs/")[-1]
+            if pid not in seen and matches_keywords(r, cfg["ml_keywords"]):
+                seen.add(pid)
+                results.append(_to_dict(r))
+
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch quant finance papers from arXiv")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--days", type=int, help="Override days_lookback")
-    parser.add_argument("--all-history", action="store_true", help="Fetch entire arXiv history (no date cutoff)")
+    parser.add_argument("--all-history", action="store_true", help="Fetch ALL papers via date-range chunks")
+    parser.add_argument("--window-start", help="Specific window start YYYYMMDD")
+    parser.add_argument("--window-end", help="Specific window end YYYYMMDD")
     parser.add_argument("--dry-run", action="store_true", help="Print without saving")
     args = parser.parse_args()
 
@@ -197,11 +253,44 @@ def main() -> None:
     conn = init_db(cfg["db_path"])
 
     if args.all_history:
-        print("Fetching ALL history from arXiv (no date cutoff). This may take 30-60 min...")
+        # Date-range chunked fetch — bypasses arXiv's 10k offset limit
+        # q-fin categories started around 1997; start from 1993 to be safe
+        start_date = date(1993, 1, 1)
+        end_date = date.today()
+        windows = date_windows(start_date, end_date, chunk_months=3)
+        total_new = 0
+
+        print(f"All-history mode: {len(windows)} quarterly windows from {start_date} to {end_date}")
+
+        for i, (w_start, w_end) in enumerate(windows, 1):
+            print(f"\n[{i}/{len(windows)}] Window: {w_start} -> {w_end}", flush=True)
+            papers = fetch_window(cfg, window_start=w_start, window_end=w_end)
+            new_count = 0
+            for p in papers:
+                if not already_fetched(conn, p["arxiv_id"]):
+                    if not args.dry_run:
+                        save_paper(conn, p)
+                    new_count += 1
+            total_new += new_count
+            total_db = count_total(conn)
+            print(f"  Window done: {len(papers)} found, {new_count} new. DB total: {total_db}", flush=True)
+
+        print(f"\nAll-history fetch complete. Total new papers: {total_new}. DB total: {count_total(conn)}")
+        conn.close()
+        return 0
+
+    if args.window_start and args.window_end:
+        w_start = datetime.strptime(args.window_start, "%Y%m%d").date()
+        w_end = datetime.strptime(args.window_end, "%Y%m%d").date()
+        papers = fetch_window(cfg, window_start=w_start, window_end=w_end)
+        label = f"window {w_start} -> {w_end}"
     else:
-        print(f"Fetching papers (last {args.days or cfg['days_lookback']} days)...")
-    papers = fetch_papers(cfg, days_override=args.days, all_history=args.all_history)
-    print(f"Found {len(papers)} papers from arXiv")
+        days = args.days or cfg["days_lookback"]
+        print(f"Fetching papers (last {days} days)...")
+        papers = fetch_recent(cfg, days_override=args.days)
+        label = f"last {days} days"
+
+    print(f"Found {len(papers)} papers from arXiv ({label})")
 
     new_count = 0
     for p in papers:
@@ -219,7 +308,8 @@ def main() -> None:
         print(f"\nSaved {new_count} new papers. {len(pending)} total pending processing.")
 
     conn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
