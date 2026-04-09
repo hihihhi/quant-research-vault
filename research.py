@@ -10,6 +10,7 @@ Commands:
     python research.py --daily                            today's new papers
     python research.py --top-crypto 10                    top N papers by Crypto score
     python research.py --export "momentum" out.md         export results to markdown
+    python research.py --distill                             distill all 12 topics to guidelines/
 """
 
 import argparse
@@ -418,21 +419,46 @@ def cmd_export(cfg: dict, query: str, output_file: str) -> None:
 # ── Distill methodology ───────────────────────────────────────────────────────
 
 _DISTILL_TOPICS = [
+    # ── Foundational methodology ───────────────────────────────────────────────
     ("idea_generation",
      "how researchers generate trading strategy ideas, hypothesis formation, "
-     "identifying anomalies, cross-disciplinary methods"),
+     "identifying anomalies, cross-disciplinary methods, data-driven discovery"),
     ("mathematical_verification",
      "statistical testing methodology, information coefficient, t-statistics, "
-     "bootstrap permutation test, out-of-sample validation"),
+     "bootstrap permutation test, multiple testing correction, deflated Sharpe, "
+     "out-of-sample validation, p-hacking"),
     ("signal_construction",
      "signal construction, feature engineering, cross-sectional ranking, "
-     "winsorization, normalization, look-ahead bias prevention"),
+     "winsorization, normalization, look-ahead bias prevention, alternative data"),
     ("backtesting",
      "backtesting methodology, transaction costs modeling, turnover, Sharpe ratio, "
-     "survivorship bias, point-in-time data"),
+     "survivorship bias, point-in-time data, walk-forward, regime conditioning"),
     ("failure_modes",
-     "overfitting strategies, data mining bias, regime change, "
-     "strategy failure modes, why strategies stop working"),
+     "overfitting strategies, data mining bias, regime change, crowding, "
+     "strategy failure modes, alpha decay, why strategies stop working"),
+    # ── Signal classes ─────────────────────────────────────────────────────────
+    ("momentum_trend",
+     "momentum factor, time series momentum, cross-sectional momentum, "
+     "trend following, CTA, 12-1 momentum, intermediate-horizon momentum"),
+    ("mean_reversion",
+     "mean reversion, pairs trading, statistical arbitrage, cointegration, "
+     "Ornstein-Uhlenbeck, convergence trading, basis trading, spread trading"),
+    ("volatility_trading",
+     "volatility forecasting, realized volatility, GARCH, HAR model, implied vol, "
+     "vol surface, variance risk premium, volatility regime, VIX"),
+    ("market_microstructure",
+     "market microstructure, order flow imbalance, Kyle lambda, price impact, "
+     "bid-ask spread, Amihud illiquidity, high frequency trading, execution"),
+    ("factor_models",
+     "factor model construction, Fama-French, risk premia, factor zoo, "
+     "multi-factor portfolio, factor timing, factor exposure, smart beta"),
+    # ── Market-specific ────────────────────────────────────────────────────────
+    ("crypto_defi",
+     "cryptocurrency trading, Bitcoin, Ethereum, DeFi, on-chain data, "
+     "perpetual futures, funding rate, crypto momentum, altcoin, blockchain analytics"),
+    ("hk_asian_equity",
+     "Hong Kong equities, HKEX, Hang Seng, H-shares, A-shares, China market, "
+     "Asian market microstructure, ADR premium, southbound northbound connect"),
 ]
 
 
@@ -482,7 +508,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
     sections: list[str] = []
 
     print(DIVIDER)
-    print("  DISTILLING QUANT RESEARCH METHODOLOGY FROM VAULT")
+    print("  DISTILLING QUANT RESEARCH METHODOLOGY FROM VAULT  (12 topics)")
     print(f"  Plan: {_PLAN_MODEL}  |  Write: {_WRITE_MODEL}")
     print(DIVIDER)
 
