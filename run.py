@@ -77,6 +77,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Fetch dry run only")
     parser.add_argument("--all-history", action="store_true",
                         help="Fetch entire arXiv history chunk by chunk, process+sync each chunk")
+    parser.add_argument("--abstract-only", action="store_true",
+                        help="Use abstract-only mode for processing (fast, no PDF/Claude). Recommended for --all-history")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -120,8 +122,10 @@ def main() -> None:
                 print("No new papers to process, skipping.", flush=True)
                 continue
 
-            # 2. Process (summarize) pending papers — limit per chunk to avoid very long runs
-            process_args = config_args + ["--limit", str(args.limit or 50)]
+            # 2. Process pending papers
+            process_args = config_args + ["--limit", str(args.limit or 500)]
+            if args.abstract_only:
+                process_args.append("--abstract-only")
             rc = run_step("process.py", process_args)
             if rc != 0:
                 print(f"Process step failed for chunk {i}.", flush=True)

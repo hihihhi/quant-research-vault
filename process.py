@@ -233,11 +233,44 @@ def vault_file_path(paper: dict, vault_path: str, research_dir: str) -> Path:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def build_abstract_entry(paper: dict) -> str:
+    """Fast vault entry using just the abstract — no PDF, no Claude."""
+    import json
+    authors = paper["authors"] if isinstance(paper["authors"], list) else json.loads(paper["authors"])
+    categories = paper["categories"] if isinstance(paper["categories"], list) else json.loads(paper["categories"])
+    published = paper["published"][:10]
+    abstract = paper["abstract"].strip()
+
+    return f"""---
+arxiv_id: {paper['arxiv_id']}
+title: "{paper['title'].replace('"', "'")}"
+authors: {', '.join(authors)}
+published: {published}
+categories: {', '.join(categories)}
+source: https://arxiv.org/abs/{paper['arxiv_id']}
+pdf: {paper['pdf_url']}
+mode: abstract-only
+---
+
+# {paper['title']}
+
+**Authors:** {', '.join(authors)}
+**Published:** {published} | **arXiv:** [{paper['arxiv_id']}](https://arxiv.org/abs/{paper['arxiv_id']})
+**Categories:** {', '.join(categories)}
+
+## Abstract
+
+{abstract}
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Process papers into vault summaries")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--arxiv-id", help="Process a specific paper")
+    parser.add_argument("--abstract-only", action="store_true",
+                        help="Skip PDF download and Claude summarization — use abstract as vault entry (fast mode)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -248,39 +281,43 @@ def main() -> None:
         print("No papers pending processing.")
         return
 
-    print(f"Processing {len(papers)} papers...")
+    mode = "abstract-only (fast)" if args.abstract_only else "full PDF + Claude summary"
+    print(f"Processing {len(papers)} papers [{mode}]...")
 
     for i, paper in enumerate(papers, 1):
-        print(f"\n[{i}/{len(papers)}] {paper['arxiv_id']}: {paper['title'][:65]}")
+        print(f"\n[{i}/{len(papers)}] {paper['arxiv_id']}: {paper['title'][:65]}", flush=True)
 
-        # Download PDF
-        pdf_text = ""
-        if cfg.get("fetch_pdf", True):
-            print("  Downloading PDF...")
-            pdf_bytes = download_pdf(paper["pdf_url"])
-            if pdf_bytes:
-                pdf_text = extract_text(pdf_bytes, cfg["max_pdf_chars"])
-                print(f"  Extracted {len(pdf_text)} chars")
+        if args.abstract_only:
+            markdown = build_abstract_entry(paper)
+        else:
+            # Download PDF
+            pdf_text = ""
+            if cfg.get("fetch_pdf", True):
+                print("  Downloading PDF...")
+                pdf_bytes = download_pdf(paper["pdf_url"])
+                if pdf_bytes:
+                    pdf_text = extract_text(pdf_bytes, cfg["max_pdf_chars"])
+                    print(f"  Extracted {len(pdf_text)} chars")
 
-        # Summarize
-        print("  Summarizing with Claude...")
-        try:
-            summary = summarize(paper, pdf_text, cfg)
-        except Exception as e:
-            print(f"  Summarization failed: {e}")
-            continue
+            # Summarize
+            print("  Summarizing with Claude...")
+            try:
+                summary = summarize(paper, pdf_text, cfg)
+            except Exception as e:
+                print(f"  Summarization failed: {e}")
+                continue
+
+            markdown = build_markdown(paper, summary)
 
         # Write to vault
         out_path = vault_file_path(paper, cfg["vault_path"], cfg["research_dir"])
-        markdown = build_markdown(paper, summary)
         out_path.write_text(markdown, encoding="utf-8")
-        print(f"  Written to {out_path}")
+        print(f"  -> {out_path.name}", flush=True)
 
-        # Mark processed
         mark_processed(conn, paper["arxiv_id"], str(out_path))
 
-        # Rate limit: 1 req/s to be polite to Claude API
-        if i < len(papers):
+        # Only sleep between papers in full-summary mode
+        if not args.abstract_only and i < len(papers):
             time.sleep(1)
 
     conn.close()
