@@ -2,10 +2,12 @@
 """
 search_mcp.py — MCP server for semantic search over the quant research vault.
 
-Exposes three tools:
-  - search_papers(query, n_results)    semantic search over summaries
-  - list_recent_papers(days)           papers added in last N days
-  - get_paper(arxiv_id)                full summary for a specific paper
+Exposes five tools:
+  - search_papers(query, n_results)         semantic search over summaries
+  - list_recent_papers(days)                papers added in last N days
+  - get_paper(arxiv_id)                     full summary for a specific paper
+  - generate_alpha_ideas(topic, n_papers)   AI-generated alpha ideas from vault
+  - get_vault_stats()                       total papers, date range, index size
 
 The ChromaDB index is built/updated by sync.py. This server is read-only.
 
@@ -19,7 +21,9 @@ Usage (test):
 import argparse
 import asyncio
 import json
+import shutil
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -117,6 +121,104 @@ def get_paper_summary(cfg: dict, arxiv_id: str) -> str | None:
     return None
 
 
+def generate_alpha_ideas_text(
+    collection: chromadb.Collection,
+    cfg: dict,
+    topic: str,
+    n_papers: int = 6,
+) -> str:
+    """Search vault for relevant papers and ask Claude for alpha ideas."""
+    count = collection.count()
+    if count == 0:
+        return "ChromaDB index is empty. Run `python run.py` to build it first."
+
+    results = collection.query(
+        query_texts=[topic],
+        n_results=min(n_papers, count),
+        include=["documents", "metadatas"],
+    )
+
+    paper_summaries: list[str] = []
+    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        arxiv_id = meta.get("arxiv_id", "")
+        title = meta.get("title", "")
+        vault_path = meta.get("vault_path", "")
+        content = doc[:2000]
+
+        if vault_path:
+            vp = Path(vault_path)
+            if vp.exists():
+                content = vp.read_text(encoding="utf-8")[:2000]
+
+        paper_summaries.append(
+            f"--- Paper: {title} ({arxiv_id}) ---\n{content}"
+        )
+
+    model = cfg.get("claude_model", "claude-haiku-4-5-20251001")
+    prompt = (
+        f"You are a quant researcher specializing in systematic trading strategies.\n"
+        f"Based on the following {len(paper_summaries)} research papers, generate 3 specific, "
+        f"implementable alpha ideas for the topic: '{topic}'.\n\n"
+        f"For each idea include:\n"
+        f"1. Signal construction (exact steps)\n"
+        f"2. Data required (source, frequency)\n"
+        f"3. Expected holding period\n"
+        f"4. Key risk and failure mode\n\n"
+        + "\n\n".join(paper_summaries)
+    )
+
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return (
+            "ERROR: 'claude' CLI not found. "
+            "Install it via: npm install -g @anthropic-ai/claude-code"
+        )
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        return "Claude CLI timed out after 300 seconds."
+
+    if result.returncode != 0:
+        return f"Claude CLI error: {result.stderr[:300]}"
+
+    return result.stdout.strip()
+
+
+def get_vault_stats_text(cfg: dict, collection: chromadb.Collection) -> str:
+    """Return vault statistics as a formatted string."""
+    conn = get_db(cfg)
+    total = conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+    processed = conn.execute(
+        "SELECT COUNT(*) FROM papers WHERE processed = 1"
+    ).fetchone()[0]
+    date_range = conn.execute(
+        "SELECT MIN(published), MAX(published) FROM papers"
+    ).fetchone()
+    conn.close()
+
+    min_date = (date_range[0] or "")[:10]
+    max_date = (date_range[1] or "")[:10]
+    index_size = collection.count()
+
+    return (
+        f"Quant Research Vault Statistics\n"
+        f"================================\n"
+        f"Total papers in DB    : {total:,}\n"
+        f"Processed papers      : {processed:,}\n"
+        f"ChromaDB index size   : {index_size:,}\n"
+        f"Date range            : {min_date} to {max_date}\n"
+    )
+
+
 # ── MCP server ────────────────────────────────────────────────────────────────
 
 def build_server() -> Server:
@@ -181,6 +283,41 @@ def build_server() -> Server:
                     "required": ["arxiv_id"],
                 },
             ),
+            types.Tool(
+                name="generate_alpha_ideas",
+                description=(
+                    "Search the vault for relevant research papers and generate specific, "
+                    "implementable alpha trading ideas on a given topic using Claude AI. "
+                    "Returns 3 alpha ideas with signal construction, data requirements, "
+                    "holding period, and key risks."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "description": "The trading topic to generate ideas for, e.g. 'crypto momentum', 'volatility arbitrage'",
+                        },
+                        "n_papers": {
+                            "type": "integer",
+                            "description": "Number of vault papers to use as context (default: 6, max: 10)",
+                            "default": 6,
+                        },
+                    },
+                    "required": ["topic"],
+                },
+            ),
+            types.Tool(
+                name="get_vault_stats",
+                description=(
+                    "Get statistics about the quant research vault: total papers, "
+                    "processed count, date range covered, and ChromaDB index size."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -216,6 +353,14 @@ def build_server() -> Server:
             arxiv_id = arguments["arxiv_id"]
             summary = get_paper_summary(cfg, arxiv_id)
             text = summary if summary else f"Paper {arxiv_id} not found or not yet processed."
+
+        elif name == "generate_alpha_ideas":
+            topic = arguments["topic"]
+            n_papers = min(int(arguments.get("n_papers", 6)), 10)
+            text = generate_alpha_ideas_text(collection, cfg, topic, n_papers)
+
+        elif name == "get_vault_stats":
+            text = get_vault_stats_text(cfg, collection)
 
         else:
             text = f"Unknown tool: {name}"
