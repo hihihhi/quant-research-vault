@@ -15,6 +15,7 @@ Commands:
 import argparse
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -36,7 +37,9 @@ CONFIG_PATH = ROOT / "config.yaml"
 
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 def get_collection(cfg: dict) -> chromadb.Collection:
@@ -412,6 +415,153 @@ def cmd_export(cfg: dict, query: str, output_file: str) -> None:
     print(f"Exported {len(papers)} papers to {out_path}")
 
 
+# ── Distill methodology ───────────────────────────────────────────────────────
+
+_DISTILL_TOPICS = [
+    ("idea_generation",
+     "how researchers generate trading strategy ideas, hypothesis formation, "
+     "identifying anomalies, cross-disciplinary methods"),
+    ("mathematical_verification",
+     "statistical testing methodology, information coefficient, t-statistics, "
+     "bootstrap permutation test, out-of-sample validation"),
+    ("signal_construction",
+     "signal construction, feature engineering, cross-sectional ranking, "
+     "winsorization, normalization, look-ahead bias prevention"),
+    ("backtesting",
+     "backtesting methodology, transaction costs modeling, turnover, Sharpe ratio, "
+     "survivorship bias, point-in-time data"),
+    ("failure_modes",
+     "overfitting strategies, data mining bias, regime change, "
+     "strategy failure modes, why strategies stop working"),
+]
+
+
+_PLAN_MODEL = "claude-opus-4-6"
+_WRITE_MODEL = "claude-sonnet-4-6"
+
+# Track active subprocess so Ctrl+C can kill it cleanly
+_distill_proc: "subprocess.Popen | None" = None
+
+
+def _run_claude(claude_bin: str, model: str, prompt: str, timeout: int = 300) -> str | None:
+    """Run claude CLI as a subprocess. One at a time — sequential, never parallel."""
+    global _distill_proc
+    proc = subprocess.Popen(
+        [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    _distill_proc = proc
+    try:
+        stdout, stderr = proc.communicate(
+            input=prompt.encode("utf-8", errors="replace"), timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        print(f"  Claude timeout ({model}) after {timeout}s")
+        return None
+    finally:
+        _distill_proc = None
+    if proc.returncode != 0:
+        print(f"  Claude error ({model}): {stderr[:200].decode('utf-8', errors='replace')}")
+        return None
+    return stdout.decode("utf-8", errors="replace").strip()
+
+
+def cmd_distill(cfg: dict, output_path: str | None) -> None:
+    """Distill quant research methodology from vault papers via Claude.
+
+    Pipeline: Opus plans the synthesis outline → Sonnet writes each section.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("ERROR: 'claude' CLI not found.")
+        return
+
+    collection = get_collection(cfg)
+    sections: list[str] = []
+
+    print(DIVIDER)
+    print("  DISTILLING QUANT RESEARCH METHODOLOGY FROM VAULT")
+    print(f"  Plan: {_PLAN_MODEL}  |  Write: {_WRITE_MODEL}")
+    print(DIVIDER)
+
+    for section_name, topic_query in _DISTILL_TOPICS:
+        print(f"\n[{section_name}] Searching vault...", flush=True)
+        results = collection.query(query_texts=[topic_query], n_results=10)
+
+        excerpts = []
+        for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+            title = meta.get("title", "Unknown")
+            arxiv_id = meta.get("arxiv_id", "")
+            excerpt = doc[:800].replace("\n", " ")
+            excerpts.append(f"[{title} / {arxiv_id}]\n{excerpt}")
+
+        paper_block = "\n\n---\n\n".join(excerpts)
+        section_title = section_name.replace("_", " ").title()
+
+        # ── Step 1: Opus plans the synthesis outline ──────────────────────────
+        print(f"  Opus planning outline...", flush=True)
+        plan_prompt = (
+            f"You are a senior quantitative researcher. Given these arXiv paper "
+            f"excerpts on '{section_title}', create a concise synthesis outline.\n\n"
+            f"Output a bullet-point outline (8-12 points) covering:\n"
+            f"- Core principles from the literature\n"
+            f"- Specific techniques/formulas worth including\n"
+            f"- Key pitfalls these papers warn about\n"
+            f"- Practical implementation steps\n\n"
+            f"Be specific — note arXiv IDs next to claims they support. "
+            f"This outline will guide a 400-word write-up.\n\n"
+            f"{'=' * 40}\n\n{paper_block}"
+        )
+        outline = _run_claude(claude_bin, _PLAN_MODEL, plan_prompt, timeout=120)
+        if not outline:
+            outline = "(no outline generated)"
+
+        # ── Step 2: Sonnet writes the section from outline + excerpts ─────────
+        print(f"  Sonnet writing section...", flush=True)
+        write_prompt = (
+            f"Write a 400-word methodology section on "
+            f"**{section_title}** in quantitative finance.\n\n"
+            f"RULES:\n"
+            f"- Output ONLY markdown. No intro sentence like 'Here is...'.\n"
+            f"- Start directly with the content.\n"
+            f"- Use this structure: Core Principle / Techniques / Pitfalls / Implementation\n"
+            f"- Cite arXiv IDs inline (e.g. [0707.0385]) where the outline maps them.\n\n"
+            f"OUTLINE TO FOLLOW:\n{outline}\n\n"
+            f"PAPER EXCERPTS FOR GROUNDING:\n{'=' * 40}\n\n{paper_block}"
+        )
+        content = _run_claude(claude_bin, _WRITE_MODEL, write_prompt, timeout=300)
+        if not content:
+            continue
+
+        sections.append(f"## {section_title}\n\n{content}")
+        print(f"  Done.")
+
+    if not sections:
+        print("No sections generated.")
+        return
+
+    vault_path = cfg.get("vault_path", ".")
+    out_file = output_path or str(
+        Path(vault_path) / "guidelines" / "quant-methodology-distilled.md"
+    )
+    Path(out_file).parent.mkdir(parents=True, exist_ok=True)
+
+    content = (
+        "# Quant Research Methodology — Distilled from Vault\n\n"
+        "> Auto-generated from arXiv quant-finance corpus via `python research.py --distill`\n"
+        f"> Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n"
+        f"> Based on {collection.count()} indexed papers\n\n"
+        "---\n\n"
+        + "\n\n---\n\n".join(sections)
+    )
+    Path(out_file).write_text(content, encoding="utf-8")
+    print(f"\n{DIVIDER}")
+    print(f"  Distilled methodology saved to: {out_file}")
+    print(DIVIDER)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -427,6 +577,8 @@ Examples:
   python research.py --daily
   python research.py --top-crypto 10
   python research.py --export "momentum" out.md
+  python research.py --distill
+  python research.py --distill path/to/output.md
         """,
     )
     parser.add_argument("query", nargs="?", help="Search query")
@@ -439,7 +591,21 @@ Examples:
                         help="Top N papers by crypto applicability score")
     parser.add_argument("--export", nargs=2, metavar=("QUERY", "OUTPUT"),
                         help="Export search results to a markdown file")
+    parser.add_argument("--distill", nargs="?", const="", metavar="OUTPUT",
+                        help="Distill methodology guide from vault (optional output path)")
     args = parser.parse_args()
+
+    # Kill active claude subprocess on Ctrl+C
+    def _sigint(sig, frame):  # noqa: ANN001
+        if _distill_proc and _distill_proc.poll() is None:
+            print("\n[research.py] Ctrl+C — terminating Claude process...", flush=True)
+            _distill_proc.terminate()
+            try:
+                _distill_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                _distill_proc.kill()
+        sys.exit(1)
+    signal.signal(signal.SIGINT, _sigint)
 
     cfg = load_config()
 
@@ -455,6 +621,8 @@ Examples:
         cmd_top_crypto(cfg, args.top_crypto)
     elif args.export:
         cmd_export(cfg, args.export[0], args.export[1])
+    elif args.distill is not None:
+        cmd_distill(cfg, args.distill or None)
     elif args.query:
         cmd_search(cfg, args.query)
     else:

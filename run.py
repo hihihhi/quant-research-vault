@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import os
 import sqlite3
 import subprocess
 import sys
@@ -33,13 +34,48 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+_STEP_TIMEOUT = {
+    "fetch.py":   60 * 30,    # 30 min per chunk
+    "process.py": 60 * 120,   # 2 hours per batch
+    "sync.py":    60 * 15,    # 15 min to sync
+}
+_active_proc: "subprocess.Popen | None" = None
+
+
+def _install_sigint_handler() -> None:
+    """On Ctrl+C, kill the active child process before exiting."""
+    import signal
+    def _handler(sig, frame):  # noqa: ANN001
+        if _active_proc and _active_proc.poll() is None:
+            print("\n[run.py] Ctrl+C — terminating child process...", flush=True)
+            _active_proc.terminate()
+            try:
+                _active_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _active_proc.kill()
+        sys.exit(1)
+    signal.signal(signal.SIGINT, _handler)
+
+
 def run_step(script: str, extra_args: list[str]) -> int:
+    global _active_proc
     cmd = [sys.executable, str(ROOT / script)] + extra_args
+    timeout = _STEP_TIMEOUT.get(script, 60 * 60)  # 1h fallback
     print(f"\n{'='*60}", flush=True)
     print(f">> {' '.join(cmd)}", flush=True)
     print('='*60, flush=True)
-    result = subprocess.run(cmd, cwd=ROOT)
-    return result.returncode
+    try:
+        _active_proc = subprocess.Popen(cmd, cwd=ROOT)
+        _active_proc.wait(timeout=timeout)
+        rc = _active_proc.returncode
+    except subprocess.TimeoutExpired:
+        print(f"\n[run.py] {script} exceeded {timeout//60} min timeout — killing.", flush=True)
+        _active_proc.kill()
+        _active_proc.wait()
+        rc = 1
+    finally:
+        _active_proc = None
+    return rc
 
 
 def count_db(db_path: str) -> tuple[int, int]:
@@ -67,6 +103,7 @@ def date_windows(start: date, end: date, chunk_months: int = 3) -> list[tuple[da
 
 
 def main() -> None:
+    _install_sigint_handler()
     parser = argparse.ArgumentParser(description="Full quant research pipeline")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--fetch-only", action="store_true")
@@ -79,9 +116,24 @@ def main() -> None:
                         help="Fetch entire arXiv history chunk by chunk, process+sync each chunk")
     parser.add_argument("--abstract-only", action="store_true",
                         help="Phase 1: fast index via abstracts only (no PDF/Claude)")
-    parser.add_argument("--workers", type=int, default=3,
-                        help="Parallel workers for Claude summarization (default 3)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Parallel Claude workers (default: auto-detect from RAM/CPU; "
+                             "process.py caps at RAM/0.5GB and CPU/2, hard max 5)")
     args = parser.parse_args()
+
+    # Auto-detect safe worker count if not explicitly set
+    if args.workers is None and not args.abstract_only:
+        try:
+            import psutil
+            cpu = (os.cpu_count() or 2) // 2
+            ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+            ram_cap = max(1, int(ram_gb / 0.5))
+            args.workers = min(cpu, ram_cap, 3)  # default cap: 3
+            print(f"[auto] Using {args.workers} Claude workers "
+                  f"(available RAM ~{ram_gb:.1f}GB, CPU cores/2={cpu})", flush=True)
+        except ImportError:
+            args.workers = 2
+            print("[auto] psutil not found; defaulting to 2 Claude workers.", flush=True)
 
     cfg = load_config(args.config)
     config_args = ["--config", args.config]
@@ -165,6 +217,10 @@ def main() -> None:
         process_args = config_args[:]
         if args.limit:
             process_args += ["--limit", str(args.limit)]
+        if args.abstract_only:
+            process_args.append("--abstract-only")
+        elif args.workers:
+            process_args += ["--workers", str(args.workers)]
         rc = run_step("process.py", process_args)
         if rc != 0:
             print(f"\nProcess failed (exit {rc}). Stopping.")

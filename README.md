@@ -117,7 +117,7 @@ Edit `config.yaml`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `vault_path` | `C:/Users/heiwa/Documents/ClaudeVault` | Where vault files are stored |
+| `vault_path` | `~/Documents/ClaudeVault` | Where vault files are stored (supports `~`) |
 | `claude_model` | `claude-haiku-4-5-20251001` | Model used for paper summarization |
 | `days_lookback` | `14` | Days back for daily pipeline runs |
 | `fetch_pdf` | `true` | Download full PDF for Phase 2 analysis |

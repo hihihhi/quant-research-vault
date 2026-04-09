@@ -1,6 +1,6 @@
 # quant-research-vault configuration
 
-vault_path: "C:/Users/heiwa/Documents/ClaudeVault"
+vault_path: "~/Documents/ClaudeVault"
 research_dir: "research"          # subfolder inside vault
 db_path: ".db/papers.sqlite"      # local tracking DB
 chroma_path: ".db/chroma"         # vector index

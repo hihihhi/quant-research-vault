@@ -4,5 +4,6 @@ chromadb>=0.5.0
 mcp[cli]>=1.0.0
 PyYAML>=6.0
 requests>=2.31.0
+psutil>=5.9.0
 # Optional: only needed if not using `claude` CLI (Max plan)
 # anthropic>=0.40.0

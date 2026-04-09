@@ -29,7 +29,9 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 # ── Database ──────────────────────────────────────────────────────────────────

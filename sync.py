@@ -25,7 +25,9 @@ import yaml
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 def get_collection(cfg: dict, rebuild: bool = False) -> chromadb.Collection:
@@ -95,6 +97,34 @@ def index_paper(collection: chromadb.Collection, paper: dict) -> bool:
     return True
 
 
+def index_guidelines(collection: chromadb.Collection, vault_path: str, rebuild: bool) -> int:
+    """Index all .md files in vault_path/guidelines/ directory."""
+    guidelines_dir = Path(vault_path) / "guidelines"
+    if not guidelines_dir.exists():
+        return 0
+
+    indexed = 0
+    for md_file in guidelines_dir.glob("*.md"):
+        doc_id = f"guideline::{md_file.stem}"
+        if not rebuild and already_indexed(collection, doc_id):
+            continue
+        content = md_file.read_text(encoding="utf-8")
+        collection.upsert(
+            ids=[doc_id],
+            documents=[content],
+            metadatas=[{
+                "arxiv_id": doc_id,
+                "title": md_file.stem.replace("-", " ").title(),
+                "categories": "guidelines",
+                "published": "2026-01-01",
+                "vault_path": str(md_file),
+            }],
+        )
+        print(f"  + guideline: {md_file.name}")
+        indexed += 1
+    return indexed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync vault papers into ChromaDB")
     parser.add_argument("--config", default="config.yaml")
@@ -122,7 +152,10 @@ def main() -> None:
             indexed += 1
             print(f"  + {paper['arxiv_id']}: {paper['title'][:65]}")
 
-    print(f"\nDone. Indexed {indexed} new papers. Skipped {skipped} already indexed.")
+    g_indexed = index_guidelines(collection, cfg["vault_path"], args.rebuild)
+    indexed += g_indexed
+
+    print(f"\nDone. Indexed {indexed} new papers/guidelines. Skipped {skipped} already indexed.")
     print(f"Total papers in index: {collection.count()}")
 
 
