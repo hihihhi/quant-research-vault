@@ -27,12 +27,49 @@ import subprocess
 import sys
 import textwrap
 import threading
+import signal
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# ── Active subprocess registry (for Ctrl+C cleanup) ──────────────────────────
+_active_procs: list["subprocess.Popen"] = []
+_procs_lock = threading.Lock()
+
+
+def _register_proc(p: "subprocess.Popen") -> None:
+    with _procs_lock:
+        _active_procs.append(p)
+
+
+def _deregister_proc(p: "subprocess.Popen") -> None:
+    with _procs_lock:
+        try:
+            _active_procs.remove(p)
+        except ValueError:
+            pass
+
+
+def _kill_all_active() -> None:
+    with _procs_lock:
+        for p in list(_active_procs):
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+
+
+def _install_sigint() -> None:
+    def _handler(sig, frame):  # noqa: ANN001
+        print("\n[process.py] Ctrl+C — killing active Claude processes...", flush=True)
+        _kill_all_active()
+        sys.exit(1)
+    signal.signal(signal.SIGINT, _handler)
 
 import pdfplumber
 import requests
@@ -101,7 +138,9 @@ Novelty: X/5 | Feasibility: X/5 | Crypto: X/5 | HK Equity: X/5
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 def get_db(db_path: str) -> sqlite3.Connection:
@@ -185,14 +224,24 @@ def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
 
     if shutil.which("claude"):
         claude_bin = shutil.which("claude")
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
-            input=prompt, capture_output=True, text=True, timeout=240,
-            encoding="utf-8", errors="replace",
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"claude CLI error: {result.stderr[:300]}")
-        return result.stdout.strip()
+        _register_proc(proc)
+        try:
+            stdout, stderr = proc.communicate(
+                input=prompt.encode("utf-8", errors="replace"), timeout=240
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise RuntimeError("claude CLI timed out after 240s")
+        finally:
+            _deregister_proc(proc)
+        if proc.returncode != 0:
+            raise RuntimeError(f"claude CLI error: {stderr[:300].decode('utf-8', errors='replace')}")
+        return stdout.decode("utf-8", errors="replace").strip()
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
@@ -297,7 +346,34 @@ def _process_one(paper: dict, cfg: dict, abstract_only: bool,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _safe_worker_count(requested: int) -> int:
+    """Calculate a machine-safe Claude worker count.
+
+    Each worker spawns one Claude CLI (node.js) process.
+    Too many workers = process storm, RAM exhaustion, unusable PC.
+    Cap based on available RAM and CPU so this is safe on any machine.
+    """
+    import psutil  # optional — only used here
+    cpu = os.cpu_count() or 2
+    try:
+        ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+        # Each claude process needs ~300-500 MB
+        ram_cap = max(1, int(ram_gb / 0.5))
+    except Exception:
+        ram_cap = 3
+    cpu_cap = max(1, cpu // 2)
+    safe = min(requested, cpu_cap, ram_cap, 5)  # never exceed 5 regardless
+    if safe < requested:
+        print(
+            f"[workers] Capped from {requested} → {safe} "
+            f"(CPU cores/2={cpu_cap}, RAM cap={ram_cap}, hard max=5)",
+            flush=True,
+        )
+    return safe
+
+
 def main() -> None:
+    _install_sigint()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int)
@@ -306,8 +382,8 @@ def main() -> None:
                         help="Phase 1: fast index (abstract only, no Claude)")
     parser.add_argument("--upgrade", action="store_true",
                         help="Re-enrich already-processed papers with full Claude analysis")
-    parser.add_argument("--workers", type=int, default=1,
-                        help="Parallel workers for Claude summarization (default 1, max ~5)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Parallel Claude workers (default: auto-detect from RAM/CPU)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -320,7 +396,19 @@ def main() -> None:
         return
 
     abstract_only = args.abstract_only
-    workers = 1 if abstract_only else max(1, min(args.workers, 8))
+
+    if abstract_only:
+        workers = 1
+    else:
+        requested = args.workers if args.workers is not None else 2
+        try:
+            workers = _safe_worker_count(requested)
+        except ImportError:
+            # psutil not installed — fall back to conservative default
+            workers = min(requested, 2)
+            print(f"[workers] psutil not found; defaulting to {workers} workers. "
+                  f"Install psutil for auto-detection.", flush=True)
+
     mode = "abstract-only" if abstract_only else f"full PDF+Claude ({workers} workers)"
     print(f"Processing {len(papers)} papers [{mode}]...", flush=True)
 

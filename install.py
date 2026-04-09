@@ -31,7 +31,9 @@ ROOT = Path(__file__).parent
 def load_config() -> dict:
     cfg_path = ROOT / "config.yaml"
     with open(cfg_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 def step(msg: str) -> None:
@@ -103,16 +105,17 @@ def create_vault_dirs(cfg: dict) -> None:
 
 def init_db(cfg: dict) -> None:
     step("Initialising SQLite database...")
+    db_path = cfg["db_path"]
     result = subprocess.run(
         [sys.executable, "-c",
          f"import sys; sys.path.insert(0, r'{ROOT}'); "
-         f"import fetch; fetch.init_db(r'{cfg[\"db_path\"]}'); "
-         f"print('DB initialised at {cfg[\"db_path\"]}')"],
+         f"import fetch; fetch.init_db(r'{db_path}'); "
+         f"print('DB initialised at {db_path}')"],
         capture_output=False,
     )
     if result.returncode != 0:
         fail("DB init failed.")
-    ok(f"SQLite DB ready at {cfg['db_path']}")
+    ok(f"SQLite DB ready at {db_path}")
 
 
 # ── 5. Wire MCP server into ~/.claude.json ────────────────────────────────────
@@ -136,15 +139,26 @@ def wire_mcp(cfg: dict) -> None:
     if "mcpServers" not in data:
         data["mcpServers"] = {}
 
-    # Use forward slashes for Windows paths in JSON (cmd /c handles it fine)
     script_str = str(script_path).replace("\\", "/")
 
-    data["mcpServers"][server_name] = {
-        "type": "stdio",
-        "command": "cmd",
-        "args": ["/c", "python", script_str],
-        "env": {},
-    }
+    if sys.platform == "win32":
+        server_config = {
+            "type": "stdio",
+            "command": "cmd",
+            "args": ["/c", "python", script_str],
+            "env": {},
+        }
+    else:
+        import shutil as _shutil
+        python_bin = _shutil.which("python3") or _shutil.which("python") or "python3"
+        server_config = {
+            "type": "stdio",
+            "command": python_bin,
+            "args": [script_str],
+            "env": {},
+        }
+
+    data["mcpServers"][server_name] = server_config
 
     claude_json_path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False),
@@ -156,6 +170,15 @@ def wire_mcp(cfg: dict) -> None:
 # ── 6. Windows Task Scheduler daily job ──────────────────────────────────────
 
 def create_scheduled_task() -> None:
+    if sys.platform != "win32":
+        step("Daily job (non-Windows)...")
+        run_script = ROOT / "run.py"
+        import shutil as _shutil
+        python_bin = _shutil.which("python3") or "python3"
+        print(f"    Add to crontab (run: crontab -e):")
+        print(f"    0 6 * * * cd {ROOT} && {python_bin} {run_script}")
+        return
+
     step("Creating Windows Task Scheduler daily job...")
     run_script = str(ROOT / "run.py").replace("/", "\\")
     python_exe = str(Path(sys.executable)).replace("/", "\\")

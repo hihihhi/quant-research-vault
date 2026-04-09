@@ -21,11 +21,12 @@ Usage (test):
 import argparse
 import asyncio
 import json
-import shutil
+import os
 import sqlite3
-import subprocess
 import sys
-from datetime import datetime, timezone, timedelta
+import tempfile
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import chromadb
@@ -37,22 +38,81 @@ import mcp.types as types
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
+# ── Single-instance lock ──────────────────────────────────────────────────────
+# Prevents Claude Code's retry loop from spawning hundreds of server processes.
+_LOCK_FILE = Path(tempfile.gettempdir()) / "quant_research_mcp.lock"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Cross-platform liveness check. Uses psutil when available."""
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+    # Unix fallback: signal 0 = check only, no signal sent
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    # Windows without psutil — assume stale
+    return False
+
+
+def _acquire_lock() -> bool:
+    """Return True if we are the only running instance. Exit-safe."""
+    if _LOCK_FILE.exists():
+        try:
+            pid = int(_LOCK_FILE.read_text().strip())
+            if _is_pid_alive(pid):
+                # Another instance is running
+                return False
+            # Stale lock
+            _LOCK_FILE.unlink(missing_ok=True)
+        except Exception:
+            _LOCK_FILE.unlink(missing_ok=True)
+    try:
+        _LOCK_FILE.write_text(str(os.getpid()))
+    except Exception:
+        pass
+    return True
+
+
+def _release_lock() -> None:
+    _LOCK_FILE.unlink(missing_ok=True)
+
 
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    return cfg
 
 
 def get_collection(cfg: dict) -> chromadb.Collection:
-    client = chromadb.PersistentClient(path=cfg["chroma_path"])
-    return client.get_or_create_collection(
-        name="quant_papers",
-        metadata={"hnsw:space": "cosine"},
-    )
+    """Open ChromaDB with retry on transient lock errors."""
+    chroma_path = cfg["chroma_path"]
+    for attempt in range(3):
+        try:
+            client = chromadb.PersistentClient(path=chroma_path)
+            return client.get_or_create_collection(
+                name="quant_papers",
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception as exc:
+            if attempt == 2:
+                raise RuntimeError(
+                    f"ChromaDB unavailable after 3 attempts: {exc}"
+                ) from exc
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError("ChromaDB unavailable")  # unreachable
 
 
 def get_db(cfg: dict) -> sqlite3.Connection:
-    return sqlite3.connect(cfg["db_path"])
+    conn = sqlite3.connect(cfg["db_path"], timeout=10)
+    return conn
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
@@ -127,7 +187,14 @@ def generate_alpha_ideas_text(
     topic: str,
     n_papers: int = 6,
 ) -> str:
-    """Search vault for relevant papers and ask Claude for alpha ideas."""
+    """Return relevant paper excerpts for alpha idea generation.
+
+    NOTE: We deliberately do NOT spawn a claude subprocess here.
+    The MCP caller (Claude Code) is already an LLM — return the raw
+    context and let it synthesize alpha ideas directly. Spawning a
+    child claude process from inside the MCP server would create
+    uncontrolled node.js process accumulation.
+    """
     count = collection.count()
     if count == 0:
         return "ChromaDB index is empty. Run `python run.py` to build it first."
@@ -138,7 +205,12 @@ def generate_alpha_ideas_text(
         include=["documents", "metadatas"],
     )
 
-    paper_summaries: list[str] = []
+    lines = [
+        f"## Vault Context for Alpha Ideas: '{topic}'\n",
+        f"Found {len(results['documents'][0])} relevant papers. "
+        f"Synthesize 3 specific alpha ideas from this context:\n",
+    ]
+
     for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
         arxiv_id = meta.get("arxiv_id", "")
         title = meta.get("title", "")
@@ -150,47 +222,9 @@ def generate_alpha_ideas_text(
             if vp.exists():
                 content = vp.read_text(encoding="utf-8")[:2000]
 
-        paper_summaries.append(
-            f"--- Paper: {title} ({arxiv_id}) ---\n{content}"
-        )
+        lines.append(f"### {title} ({arxiv_id})\n{content}\n")
 
-    model = cfg.get("claude_model", "claude-haiku-4-5-20251001")
-    prompt = (
-        f"You are a quant researcher specializing in systematic trading strategies.\n"
-        f"Based on the following {len(paper_summaries)} research papers, generate 3 specific, "
-        f"implementable alpha ideas for the topic: '{topic}'.\n\n"
-        f"For each idea include:\n"
-        f"1. Signal construction (exact steps)\n"
-        f"2. Data required (source, frequency)\n"
-        f"3. Expected holding period\n"
-        f"4. Key risk and failure mode\n\n"
-        + "\n\n".join(paper_summaries)
-    )
-
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        return (
-            "ERROR: 'claude' CLI not found. "
-            "Install it via: npm install -g @anthropic-ai/claude-code"
-        )
-
-    try:
-        result = subprocess.run(
-            [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except subprocess.TimeoutExpired:
-        return "Claude CLI timed out after 300 seconds."
-
-    if result.returncode != 0:
-        return f"Claude CLI error: {result.stderr[:300]}"
-
-    return result.stdout.strip()
+    return "\n---\n".join(lines)
 
 
 def get_vault_stats_text(cfg: dict, collection: chromadb.Collection) -> str:
@@ -372,8 +406,11 @@ def build_server() -> Server:
 
 async def run_server() -> None:
     server = build_server()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        _release_lock()
 
 
 # ── CLI test mode ─────────────────────────────────────────────────────────────
@@ -401,4 +438,16 @@ if __name__ == "__main__":
     if args.test:
         test_search(args.test)
     else:
-        asyncio.run(run_server())
+        # Refuse to start if another instance is already running.
+        # This stops Claude Code's retry loop from creating process storms.
+        if not _acquire_lock():
+            sys.stderr.write(
+                "quant-research MCP: another instance already running, exiting.\n"
+            )
+            sys.exit(0)  # exit 0 so Claude Code does NOT retry
+        try:
+            asyncio.run(run_server())
+        except Exception as exc:
+            sys.stderr.write(f"quant-research MCP fatal: {exc}\n")
+            _release_lock()
+            sys.exit(0)  # exit 0, not 1 — prevents infinite retry loop
