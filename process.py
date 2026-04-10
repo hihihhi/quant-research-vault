@@ -5,71 +5,34 @@ process.py — Build the quantitative knowledge vault.
 Two-phase design:
   Phase 1 (--abstract-only): Index all papers instantly using abstracts.
                               Gets 40k papers searchable in ~1-2 hours.
-  Phase 2 (--workers N):     Parallel Claude enrichment — downloads full PDF,
-                              generates structured trading analysis alongside
-                              the abstract. Upgrades abstract-only entries.
+  Phase 2 (ANTHROPIC_API_KEY): Full analysis via Anthropic API.
+                              Or use Claude Code with ANALYSIS_SKILL.md
+                              to process papers with multi-agent teams.
 
 Usage:
     python process.py --abstract-only          # Phase 1: fast index all pending
-    python process.py --workers 3              # Phase 2: full analysis, 3 parallel
+    python process.py --workers 3              # Phase 2: full analysis (API key required)
     python process.py --workers 5 --limit 100  # Full analysis, 5 workers, 100 papers
     python process.py --arxiv-id 2401.12345    # Single paper, full analysis
     python process.py --upgrade                # Re-enrich abstract-only entries
+
+NOTE: subprocess-spawning claude CLI mode removed to prevent zombie Node.js processes.
+For Claude Code analysis, see ANALYSIS_SKILL.md.
 """
 
 import argparse
 import io
 import json
 import os
-import shutil
 import sqlite3
-import subprocess
 import sys
 import textwrap
 import threading
-import signal
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-# ── Active subprocess registry (for Ctrl+C cleanup) ──────────────────────────
-_active_procs: list["subprocess.Popen"] = []
-_procs_lock = threading.Lock()
-
-
-def _register_proc(p: "subprocess.Popen") -> None:
-    with _procs_lock:
-        _active_procs.append(p)
-
-
-def _deregister_proc(p: "subprocess.Popen") -> None:
-    with _procs_lock:
-        try:
-            _active_procs.remove(p)
-        except ValueError:
-            pass
-
-
-def _kill_all_active() -> None:
-    with _procs_lock:
-        for p in list(_active_procs):
-            if p.poll() is None:
-                p.terminate()
-                try:
-                    p.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    p.kill()
-
-
-def _install_sigint() -> None:
-    def _handler(sig, frame):  # noqa: ANN001
-        print("\n[process.py] Ctrl+C — killing active Claude processes...", flush=True)
-        _kill_all_active()
-        sys.exit(1)
-    signal.signal(signal.SIGINT, _handler)
 
 import pdfplumber
 import requests
@@ -222,27 +185,6 @@ def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
     prompt = SUMMARY_PROMPT.format(text=source)
     model = cfg["claude_model"]
 
-    if shutil.which("claude"):
-        claude_bin = shutil.which("claude")
-        proc = subprocess.Popen(
-            [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        _register_proc(proc)
-        try:
-            stdout, stderr = proc.communicate(
-                input=prompt.encode("utf-8", errors="replace"), timeout=240
-            )
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            raise RuntimeError("claude CLI timed out after 240s")
-        finally:
-            _deregister_proc(proc)
-        if proc.returncode != 0:
-            raise RuntimeError(f"claude CLI error: {stderr[:300].decode('utf-8', errors='replace')}")
-        return stdout.decode("utf-8", errors="replace").strip()
-
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
         client = anthropic.Anthropic()
@@ -253,7 +195,12 @@ def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
         return msg.content[0].text
 
     raise RuntimeError(
-        "No Claude auth. Install claude CLI (Max plan) or set ANTHROPIC_API_KEY."
+        "No ANTHROPIC_API_KEY set.\n"
+        "Options:\n"
+        "  1) Set ANTHROPIC_API_KEY and re-run for direct API access.\n"
+        "  2) Use Claude Code with ANALYSIS_SKILL.md for multi-agent paper analysis\n"
+        "     (no subprocess spawning, no zombie Node.js processes).\n"
+        "  3) Run with --abstract-only for Phase 1 indexing (no Claude needed)."
     )
 
 
@@ -363,11 +310,9 @@ def _process_one(paper: dict, cfg: dict, abstract_only: bool,
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _safe_worker_count(requested: int) -> int:
-    """Calculate a machine-safe Claude worker count.
+    """Calculate a safe API worker count for concurrent Anthropic API calls.
 
-    Each worker spawns one Claude CLI (node.js) process.
-    Too many workers = process storm, RAM exhaustion, unusable PC.
-    Cap based on available RAM and CPU so this is safe on any machine.
+    Caps based on available RAM and CPU to avoid overwhelming the machine.
     """
     import psutil  # optional — only used here
     cpu = os.cpu_count() or 2
@@ -389,7 +334,6 @@ def _safe_worker_count(requested: int) -> int:
 
 
 def main() -> None:
-    _install_sigint()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int)
