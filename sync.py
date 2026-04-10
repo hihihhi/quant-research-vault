@@ -104,7 +104,7 @@ def index_guidelines(collection: chromadb.Collection, vault_path: str, rebuild: 
         return 0
 
     indexed = 0
-    for md_file in guidelines_dir.glob("*.md"):
+    for md_file in guidelines_dir.rglob("*.md"):  # rglob catches snapshots/ subdir
         doc_id = f"guideline::{md_file.stem}"
         if not rebuild and already_indexed(collection, doc_id):
             continue

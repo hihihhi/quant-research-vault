@@ -597,6 +597,92 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
     print(DIVIDER)
 
 
+# ── Snapshot ──────────────────────────────────────────────────────────────────
+
+def cmd_snapshot(cfg: dict, topic: str) -> None:
+    """Synthesize vault knowledge on a specific topic into a focused doc.
+
+    Council decision: vault-first (no live fetch), single Sonnet call.
+    Cost: ~$0.20 per run. Use --deepdive (future) for new-paper fetching.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("ERROR: 'claude' CLI not found.")
+        return
+
+    collection = get_collection(cfg)
+    if collection.count() == 0:
+        print("ChromaDB index is empty. Run `python sync.py` first.")
+        return
+
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", topic.lower()).strip("-")
+    date_str = datetime.now().strftime("%Y-%m-%d")
+
+    print(DIVIDER)
+    print(f"  SNAPSHOT: {topic}")
+    print(f"  Searching vault for top 12 relevant papers...")
+    print(DIVIDER)
+
+    results = collection.query(query_texts=[topic], n_results=12)
+    if not results["documents"][0]:
+        print(f"No papers found for '{topic}'. Try a broader query.")
+        return
+
+    excerpts = []
+    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        title = meta.get("title", "Unknown")
+        arxiv_id = meta.get("arxiv_id", "")
+        published = (meta.get("published") or "")[:7]
+        excerpt = doc[:1200].replace("\n", " ")
+        excerpts.append(f"**[{arxiv_id}]** {title} ({published})\n{excerpt}")
+
+    paper_block = "\n\n---\n\n".join(excerpts)
+
+    prompt = (
+        f"You are a senior quantitative researcher. Synthesize the following vault excerpts "
+        f"on the topic: **{topic}**\n\n"
+        f"Output ONLY markdown with this structure (no preamble):\n\n"
+        f"## Key Findings\n"
+        f"3-5 bullet points: the most important, actionable insights from these papers.\n\n"
+        f"## Signal / Strategy Ideas\n"
+        f"What trading signals or strategies emerge from this research? Be specific.\n\n"
+        f"## Implementation Notes\n"
+        f"What does a practitioner need to know to implement the strongest idea here?\n"
+        f"Include: data requirements, key parameters, failure modes to watch.\n\n"
+        f"## Contradictions & Open Questions\n"
+        f"Where do papers disagree? What's unresolved?\n\n"
+        f"## Further Reading\n"
+        f"List the 3 most important papers from below (arXiv ID + title).\n\n"
+        f"{'=' * 50}\n\n{paper_block}"
+    )
+
+    print(f"  Sonnet synthesizing {len(results['documents'][0])} papers...", flush=True)
+    content = _run_claude(claude_bin, _WRITE_MODEL, prompt, timeout=180)
+    if not content:
+        print("Synthesis failed.")
+        return
+
+    vault_path = cfg.get("vault_path", ".")
+    out_dir = Path(vault_path) / "guidelines" / "snapshots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{slug}-{date_str}.md"
+
+    doc = (
+        f"# Snapshot: {topic}\n\n"
+        f"> Generated: {date_str} | Papers: {len(results['documents'][0])} | "
+        f"Model: {_WRITE_MODEL}\n\n"
+        f"---\n\n{content}\n"
+    )
+    out_file.write_text(doc, encoding="utf-8")
+
+    print(f"\n{DIVIDER}")
+    print(f"  Snapshot saved: {out_file}")
+    print(f"  Use in Claude Code: @{out_file}")
+    print(f"  (Run `python sync.py` to make it searchable via MCP)")
+    print(DIVIDER)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -614,6 +700,7 @@ Examples:
   python research.py --export "momentum" out.md
   python research.py --distill
   python research.py --distill path/to/output.md
+  python research.py --snapshot "crypto funding rate RL"
         """,
     )
     parser.add_argument("query", nargs="?", help="Search query")
@@ -628,6 +715,8 @@ Examples:
                         help="Export search results to a markdown file")
     parser.add_argument("--distill", nargs="?", const="", metavar="OUTPUT",
                         help="Distill methodology guide from vault (optional output path)")
+    parser.add_argument("--snapshot", metavar="TOPIC",
+                        help="Synthesize vault knowledge on a specific topic into a focused doc")
     args = parser.parse_args()
 
     # Kill active claude subprocess on Ctrl+C
@@ -658,6 +747,8 @@ Examples:
         cmd_export(cfg, args.export[0], args.export[1])
     elif args.distill is not None:
         cmd_distill(cfg, args.distill or None)
+    elif args.snapshot:
+        cmd_snapshot(cfg, args.snapshot)
     elif args.query:
         cmd_search(cfg, args.query)
     else:
