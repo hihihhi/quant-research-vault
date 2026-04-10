@@ -125,10 +125,21 @@ def index_guidelines(collection: chromadb.Collection, vault_path: str, rebuild: 
     return indexed
 
 
+def is_fully_analyzed(vault_path: str) -> bool:
+    """Check if a vault file has full Claude analysis (not just abstract)."""
+    try:
+        content = Path(vault_path).read_text(encoding="utf-8", errors="replace")
+        return "## Signal" in content or "## Construction" in content
+    except Exception:
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync vault papers into ChromaDB")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--rebuild", action="store_true", help="Wipe and rebuild index")
+    parser.add_argument("--update-analyzed", action="store_true",
+                        help="Re-upsert papers that now have full analysis content")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -146,8 +157,12 @@ def main() -> None:
     skipped = 0
     for paper in papers:
         if not args.rebuild and already_indexed(collection, paper["arxiv_id"]):
-            skipped += 1
-            continue
+            # Re-upsert if the vault file now has full analysis (not just abstract)
+            if args.update_analyzed and paper.get("vault_path") and is_fully_analyzed(paper["vault_path"]):
+                pass  # fall through to index_paper below
+            else:
+                skipped += 1
+                continue
         if index_paper(collection, paper):
             indexed += 1
             print(f"  + {paper['arxiv_id']}: {paper['title'][:65]}")
