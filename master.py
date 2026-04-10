@@ -47,8 +47,6 @@ _DEFAULT_PROGRESS = {
     "ss_done": False,
     "synced_after_sources": False,
     "first_distill_done": False,
-    "phase2_batches": 0,
-    "phase2_total_processed": 0,
     "distillations": [],
     "last_distill_paper_count": 0,
     "verified": False,
@@ -119,43 +117,6 @@ def pending_count() -> int:
         return n
     except Exception:
         return 0
-
-
-def phase2_pending_count() -> int:
-    """Papers with abstract-only vault files — no full Claude analysis yet."""
-    cfg = load_config()
-    try:
-        conn = sqlite3.connect(cfg["db_path"])
-        rows = conn.execute(
-            "SELECT vault_path FROM papers WHERE processed=1 AND vault_path IS NOT NULL"
-        ).fetchall()
-        conn.close()
-        count = 0
-        for (vp,) in rows:
-            if not vp:
-                continue
-            try:
-                content = Path(vp).read_text(encoding="utf-8", errors="replace")
-                if "## Signal" not in content and "## Construction" not in content:
-                    count += 1
-            except Exception:
-                pass
-        return count
-    except Exception:
-        return 0
-
-
-# ── Safe worker count ─────────────────────────────────────────────────────────
-
-def _safe_workers() -> int:
-    try:
-        import psutil
-        cpu = max(1, (os.cpu_count() or 2) // 2)
-        ram_gb = psutil.virtual_memory().available / (1024 ** 3)
-        ram_cap = max(1, int(ram_gb / 0.5))
-        return min(cpu, ram_cap, 3)  # hard cap 3 for master orchestration
-    except ImportError:
-        return 2
 
 
 # ── Subprocess runner ─────────────────────────────────────────────────────────
@@ -306,35 +267,7 @@ def phase4_sync(progress: dict, label: str = "") -> None:
         save_progress(progress)
 
 
-# ── Phase 5: Phase 2 Claude analysis ─────────────────────────────────────────
-
-def phase5_process_batch(progress: dict, batch_size: int = 100) -> int:
-    """Upgrade one batch of abstract-only papers to full Claude analysis."""
-    pending = phase2_pending_count()
-    if pending == 0:
-        return 0
-
-    workers = _safe_workers()
-    actual_batch = min(batch_size, pending)
-    log(f"Phase 2: upgrading {actual_batch} papers with full Claude analysis "
-        f"({pending} abstract-only remain, {workers} workers)")
-
-    rc = run_step(
-        [sys.executable, str(ROOT / "process.py"),
-         "--upgrade", "--workers", str(workers), "--limit", str(actual_batch)],
-        timeout=7200,
-        label=f"Phase2 batch {progress['phase2_batches'] + 1}",
-    )
-
-    if rc == 0:
-        progress["phase2_batches"] += 1
-        progress["phase2_total_processed"] += actual_batch
-        save_progress(progress)
-        return actual_batch
-    return 0
-
-
-# ── Phase 6: Distillation ─────────────────────────────────────────────────────
+# ── Phase 5: Distillation ─────────────────────────────────────────────────────
 
 def run_distillation(progress: dict, label: str = "") -> bool:
     """Run full 12-topic distillation. Returns True on success."""
@@ -365,23 +298,14 @@ def run_distillation(progress: dict, label: str = "") -> bool:
 
 def should_distill(progress: dict) -> bool:
     """Check if a new distillation pass is warranted."""
-    n = paper_count()
-    last = progress.get("last_distill_paper_count", 0)
-
-    # First distillation: always run after Phase 1
     if not progress["first_distill_done"]:
         return True
 
     # Re-distill when paper count grows by 25% or 2000 papers (whichever first)
+    n = paper_count()
+    last = progress.get("last_distill_paper_count", 0)
     growth = n - last
     if growth >= max(2000, int(last * 0.25)):
-        return True
-
-    # Re-distill after every 1000 Phase 2 papers
-    phase2_since_last = progress["phase2_total_processed"] - (
-        progress.get("last_distill_phase2", 0)
-    )
-    if phase2_since_last >= 1000:
         return True
 
     return False
@@ -422,17 +346,13 @@ def verify_distillation() -> dict:
 
 def print_status(progress: dict) -> None:
     n = paper_count()
-    pending = pending_count()
     print("\n" + "=" * 60)
     print("  QUANT BRAIN BUILD — STATUS")
     print("=" * 60)
-    p2_pending = phase2_pending_count()
     print(f"  Papers in DB     : {n:,}")
-    print(f"  Pending Phase 2  : {p2_pending:,} abstract-only (need full Claude)")
     print(f"  Phase 1 arXiv    : {'DONE' if progress['arxiv_done'] else 'IN PROGRESS'}")
     print(f"  Phase 2 OpenAlex : {'DONE' if progress['openalex_done'] else 'PENDING'}")
     print(f"  Phase 3 Sem.Sch. : {'DONE' if progress['ss_done'] else 'PENDING'}")
-    print(f"  Phase 2 analysis : {progress['phase2_total_processed']:,} papers processed")
     print(f"  Distillations    : {len(progress['distillations'])} runs")
     if progress["distillations"]:
         last = progress["distillations"][-1]
@@ -440,6 +360,7 @@ def print_status(progress: dict) -> None:
     vr = verify_distillation()
     print(f"  Distill quality  : {'OK' if vr.get('ok') else 'NEEDS WORK'} — "
           f"{vr.get('word_count', 0):,} words, {vr.get('topics_covered', '?')} topics")
+    print(f"\n  Full analysis    : use Claude Code + ANALYSIS_SKILL.md")
     print("=" * 60)
 
 
@@ -466,8 +387,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Quant Brain autonomous build orchestration")
     parser.add_argument("--status", action="store_true", help="Show status and exit")
     parser.add_argument("--distill-now", action="store_true", help="Run distillation immediately")
-    parser.add_argument("--phase2-only", action="store_true", help="Only run Phase 2 batches")
-    parser.add_argument("--batch-size", type=int, default=100, help="Phase 2 papers per batch")
     args = parser.parse_args()
 
     progress = load_progress()
@@ -489,20 +408,6 @@ def main() -> None:
     log("QUANT BRAIN BUILD — starting orchestration")
     log(f"Paper count: {paper_count():,}")
     log("=" * 60)
-
-    if args.phase2_only:
-        # Just process Phase 2 batches until done
-        while phase2_pending_count() > 0:
-            processed = phase5_process_batch(progress, args.batch_size)
-            if processed == 0:
-                break
-            phase4_sync(progress, "after batch")
-            if should_distill(progress):
-                run_distillation(progress, f"iter-{len(progress['distillations']) + 1}")
-                progress["last_distill_phase2"] = progress["phase2_total_processed"]
-                save_progress(progress)
-        log("Phase 2 complete.")
-        return
 
     # ── Full orchestration loop ───────────────────────────────────────────────
     iteration = 0
@@ -543,41 +448,16 @@ def main() -> None:
             time.sleep(5)
             continue
 
-        # Step 5: Phase 2 processing — batch by batch (upgrade abstract-only → full analysis)
-        pending = phase2_pending_count()
-        if pending > 0:
-            processed = phase5_process_batch(progress, args.batch_size)
-            if processed > 0:
-                phase4_sync(progress, "after-batch")
-                # Re-distill at milestones
-                if should_distill(progress):
-                    run_distillation(
-                        progress,
-                        label=f"iter-{len(progress['distillations']) + 1}",
-                    )
-                    progress["last_distill_phase2"] = progress["phase2_total_processed"]
-                    vr = verify_distillation()
-                    log(f"Verification: {vr}")
-                    save_progress(progress)
-            else:
-                log("Phase 2 batch returned 0 — something wrong, waiting 120s")
-                time.sleep(120)
-            continue
-
-        # Step 6: All done — final verification and distillation
-        log("All phases complete!")
-        if should_distill(progress):
-            run_distillation(progress, label="final")
-
+        # Step 5: All sources downloaded and distilled — done.
+        log("All download phases complete!")
         vr = verify_distillation()
-        log(f"Final verification: {vr}")
+        log(f"Distillation quality: {vr}")
 
         if vr.get("ok"):
             progress["verified"] = True
             save_progress(progress)
-            log("COMPLETE — quant brain verified and ready.")
+            log("COMPLETE — papers downloaded and distilled. Use ANALYSIS_SKILL.md for full analysis.")
             print_status(progress)
-            break
         else:
             log(f"Quality check FAILED: {vr}. Re-running distillation...")
             run_distillation(progress, label=f"retry-{len(progress['distillations'])}")
@@ -585,11 +465,10 @@ def main() -> None:
             if vr2.get("ok"):
                 progress["verified"] = True
                 save_progress(progress)
-                log("COMPLETE after retry — quant brain verified.")
-                break
+                log("COMPLETE after retry — quant brain ready.")
             else:
-                log("Still failing verification. Will try again after 5 min...")
-                time.sleep(300)
+                log("Distillation quality still thin. Add more papers or run --distill-now manually.")
+        break
 
     log("master.py done.")
 
