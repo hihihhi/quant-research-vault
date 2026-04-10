@@ -262,8 +262,9 @@ def fetch_openalex_window(cfg: dict, window_start=None, window_end=None) -> list
                 continue
 
             # Build synthetic ID from OpenAlex work ID
-            oa_id = (work.get("id") or "").split("works/")[-1]
-            if not oa_id:
+            # API returns "https://openalex.org/W2945425436" — take last path segment
+            oa_id = (work.get("id") or "").rstrip("/").rsplit("/", 1)[-1]
+            if not oa_id or not oa_id.startswith("W"):
                 continue
             paper_id = f"oa:{oa_id}"
             if paper_id in seen_ids:
