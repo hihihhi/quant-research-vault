@@ -5,40 +5,100 @@ research_dir: "research"          # subfolder inside vault
 db_path: ".db/papers.sqlite"      # local tracking DB
 chroma_path: ".db/chroma"         # vector index
 
-# arXiv categories to monitor
-categories:
-  - q-fin.PM   # Portfolio Management
-  - q-fin.TR   # Trading & Market Microstructure
-  - q-fin.ST   # Statistical Finance
-  - q-fin.RM   # Risk Management
-  - q-fin.CP   # Computational Finance
-  - q-fin.MF   # Mathematical Finance
+# ─── Research Domain Profiles ────────────────────────────────────────────────
+# Enable/disable entire research domains. Each profile defines:
+#   categories : arXiv categories to monitor
+#   keywords   : filter list — paper must match at least one (empty [] = include all)
+#
+# Currently supported: quant_finance | ml_for_finance | econophysics | reinforcement_learning
+# Add more by following the same pattern.
+profiles:
 
-# Broad ML/CS categories — filtered by keywords below
-ml_categories:
-  - stat.ML
-  - cs.LG
+  quant_finance:
+    enabled: true
+    description: "Core quantitative finance (q-fin.*)"
+    categories:
+      - q-fin.PM   # Portfolio Management
+      - q-fin.TR   # Trading & Market Microstructure
+      - q-fin.ST   # Statistical Finance
+      - q-fin.RM   # Risk Management
+      - q-fin.CP   # Computational Finance
+      - q-fin.MF   # Mathematical Finance
+    keywords: []   # no filter — include all q-fin papers
 
-# Keywords required for ml_categories papers (any match = include)
-ml_keywords:
-  - portfolio
-  - trading
-  - stock return
-  - asset pricing
-  - factor model
-  - volatility
-  - regime
-  - microstructure
-  - cryptocurrency
-  - crypto
-  - high frequency
-  - risk premium
-  - alpha
-  - momentum
-  - mean reversion
-  - pairs trading
-  - market making
-  - order book
+  ml_for_finance:
+    enabled: true
+    description: "ML/statistics papers relevant to trading and finance"
+    categories:
+      - stat.ML
+      - cs.LG
+    keywords:
+      - portfolio
+      - trading
+      - stock return
+      - asset pricing
+      - factor model
+      - volatility
+      - regime
+      - microstructure
+      - cryptocurrency
+      - crypto
+      - high frequency
+      - risk premium
+      - alpha
+      - momentum
+      - mean reversion
+      - pairs trading
+      - market making
+      - order book
+
+  econophysics:
+    enabled: true
+    description: "Physics approaches to markets — power laws, scaling, agent-based models"
+    categories:
+      - physics.soc-ph     # Physics and Society
+      - cond-mat.stat-mech # Statistical Mechanics
+    keywords:
+      - econophysics
+      - power law
+      - heavy tail
+      - fat tail
+      - Zipf
+      - Pareto distribution
+      - Levy distribution
+      - Hurst exponent
+      - long memory
+      - multifractal
+      - agent-based
+      - financial network
+      - log-periodic
+      - market crash
+      - financial crisis
+      - scaling law
+      - self-organized
+      - stock market
+      - price dynamics
+
+  reinforcement_learning:
+    enabled: true
+    description: "RL applied to trading, execution, and portfolio management"
+    categories:
+      - cs.AI
+      - cs.LG
+    keywords:
+      - reinforcement learning
+      - deep reinforcement learning
+      - Q-learning
+      - policy gradient
+      - DDPG
+      - PPO
+      - actor-critic
+      - trading agent
+      - order execution
+      - portfolio optimization
+      - reward shaping
+      - market simulation
+      - algorithmic trading
 
 # Fetch settings
 max_papers_per_run: 30
@@ -56,11 +116,11 @@ mcp_server_name: "quant-research"
 # Set enabled: true to activate. These only add papers NOT already in arXiv.
 extra_sources:
   openalex:
-    enabled: false          # integrated into --all-history windowed fetch
-    mailto: ""              # optional: your email for OpenAlex polite pool (10x rate limit)
-    max_per_window: 300     # max papers per 3-month window from this source
+    enabled: true          # integrated into --all-history windowed fetch
+    mailto: ""             # optional: your email for OpenAlex polite pool (10x rate limit)
+    max_per_window: 300    # max papers per 3-month window from this source
   semantic_scholar:
-    enabled: false          # run separately: python fetch.py --fetch-ss
-    api_key: ""             # optional: free key from semanticscholar.org/product/api
-    query: "quantitative finance trading portfolio risk alpha momentum cryptocurrency"
-    max_results: 10000      # total papers to import in one --fetch-ss run
+    enabled: false         # run separately: python fetch.py --fetch-ss
+    api_key: ""            # optional: free key from semanticscholar.org/product/api
+    query: "quantitative finance trading portfolio risk alpha momentum cryptocurrency econophysics reinforcement learning"
+    max_results: 10000     # total papers to import in one --fetch-ss run
