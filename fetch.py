@@ -427,50 +427,45 @@ def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
     return results
 
 
+def _active_profiles(cfg: dict) -> list[tuple[str, dict]]:
+    """Return list of (name, profile) for all enabled profiles."""
+    return [
+        (name, p) for name, p in cfg.get("profiles", {}).items()
+        if p.get("enabled")
+    ]
+
+
 def fetch_window(cfg: dict, window_start: date | None = None, window_end: date | None = None,
                  max_per_query: int = 2000) -> list[dict]:
     """Fetch papers in a specific date window (or all if no window given)."""
+    import time as _time_mod
     client = arxiv.Client(page_size=100, delay_seconds=5, num_retries=3)
     results: list[dict] = []
     seen: set[str] = set()
 
-    # Regular quant-fin categories
-    if cfg.get("categories"):
-        query = build_query(cfg["categories"], window_start, window_end)
+    for profile_name, profile in _active_profiles(cfg):
+        cats = profile.get("categories", [])
+        keywords = profile.get("keywords", [])
+        if not cats:
+            continue
+        _time_mod.sleep(3)
+        query = build_query(cats, window_start, window_end)
         search = arxiv.Search(
             query=query,
             max_results=max_per_query,
             sort_by=arxiv.SortCriterion.SubmittedDate,
             sort_order=arxiv.SortOrder.Descending,
         )
+        count = 0
         for r in _iter_with_retry(client, search):
             pid = r.entry_id.split("/abs/")[-1]
             if pid not in seen:
-                seen.add(pid)
-                results.append(_to_dict(r))
-                if len(results) % 100 == 0:
-                    print(f"  [q-fin] {len(results)} papers...", flush=True)
-
-    # ML categories — keyword filtered
-    if cfg.get("ml_categories") and cfg.get("ml_keywords"):
-        import time
-        time.sleep(5)  # brief pause between category queries
-        ml_count = 0
-        query = build_query(cfg["ml_categories"], window_start, window_end)
-        search = arxiv.Search(
-            query=query,
-            max_results=max_per_query,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
-        for r in _iter_with_retry(client, search):
-            pid = r.entry_id.split("/abs/")[-1]
-            if pid not in seen and matches_keywords(r, cfg["ml_keywords"]):
-                seen.add(pid)
-                results.append(_to_dict(r))
-                ml_count += 1
-                if ml_count % 100 == 0:
-                    print(f"  [ml] {ml_count} relevant ML papers...", flush=True)
+                if not keywords or matches_keywords(r, keywords):
+                    seen.add(pid)
+                    results.append(_to_dict(r))
+                    count += 1
+                    if count % 100 == 0:
+                        print(f"  [{profile_name}] {count} papers...", flush=True)
 
     # ── Extra sources (OpenAlex/SSRN) ──────────────────────────────────────────
     oa_papers = fetch_openalex_window(cfg, window_start, window_end)
@@ -494,24 +489,12 @@ def fetch_recent(cfg: dict, days_override: int | None = None) -> list[dict]:
     results: list[dict] = []
     seen: set[str] = set()
 
-    if cfg.get("categories"):
-        query = " OR ".join(f"cat:{c}" for c in cfg["categories"])
-        search = arxiv.Search(
-            query=query,
-            max_results=cfg["max_papers_per_run"],
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
-        for r in client.results(search):
-            if r.published < cutoff:
-                break
-            pid = r.entry_id.split("/abs/")[-1]
-            if pid not in seen:
-                seen.add(pid)
-                results.append(_to_dict(r))
-
-    if cfg.get("ml_categories") and cfg.get("ml_keywords"):
-        query = " OR ".join(f"cat:{c}" for c in cfg["ml_categories"])
+    for profile_name, profile in _active_profiles(cfg):
+        cats = profile.get("categories", [])
+        keywords = profile.get("keywords", [])
+        if not cats:
+            continue
+        query = " OR ".join(f"cat:{c}" for c in cats)
         search = arxiv.Search(
             query=query,
             max_results=cfg["max_papers_per_run"] * 3,
@@ -522,9 +505,10 @@ def fetch_recent(cfg: dict, days_override: int | None = None) -> list[dict]:
             if r.published < cutoff:
                 break
             pid = r.entry_id.split("/abs/")[-1]
-            if pid not in seen and matches_keywords(r, cfg["ml_keywords"]):
-                seen.add(pid)
-                results.append(_to_dict(r))
+            if pid not in seen:
+                if not keywords or matches_keywords(r, keywords):
+                    seen.add(pid)
+                    results.append(_to_dict(r))
 
     return results
 

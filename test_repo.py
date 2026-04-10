@@ -95,8 +95,10 @@ def test_config() -> None:
 
     check("claude_model set", bool(cfg.get("claude_model")),
           detail=cfg.get("claude_model", "NOT SET"))
-    check("categories configured", bool(cfg.get("categories")),
-          detail=f"{len(cfg.get('categories', []))} categories")
+    profiles = cfg.get("profiles", {})
+    enabled = [n for n, p in profiles.items() if p.get("enabled")]
+    check("profiles configured", bool(enabled),
+          detail=f"{len(enabled)} enabled: {', '.join(enabled)}")
 
 
 # ── 3. Database ────────────────────────────────────────────────────────────────

@@ -82,11 +82,13 @@ def create_vault_dirs(cfg: dict) -> None:
     step("Creating vault directory tree...")
     vault_path = Path(cfg["vault_path"])
     research_dir = vault_path / cfg.get("research_dir", "research")
-    categories = cfg.get("categories", [])
 
     research_dir.mkdir(parents=True, exist_ok=True)
-    for cat in categories:
-        (research_dir / cat).mkdir(parents=True, exist_ok=True)
+    for profile_name, profile in cfg.get("profiles", {}).items():
+        if not profile.get("enabled"):
+            continue
+        for cat in profile.get("categories", []):
+            (research_dir / cat).mkdir(parents=True, exist_ok=True)
 
     # Also create .db directory
     db_path = Path(cfg["db_path"])

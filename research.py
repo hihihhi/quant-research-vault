@@ -459,6 +459,15 @@ _DISTILL_TOPICS = [
     ("hk_asian_equity",
      "Hong Kong equities, HKEX, Hang Seng, H-shares, A-shares, China market, "
      "Asian market microstructure, ADR premium, southbound northbound connect"),
+    # ── Domain cross-overs ─────────────────────────────────────────────────────
+    ("econophysics",
+     "econophysics power law fat tail Zipf Pareto Levy Hurst exponent long memory "
+     "multifractal agent-based model financial network log-periodic market crash "
+     "scaling law self-organized criticality return distribution"),
+    ("reinforcement_learning_trading",
+     "reinforcement learning trading deep RL Q-learning policy gradient DDPG PPO "
+     "actor-critic trading agent portfolio optimization order execution reward shaping "
+     "market simulation multi-agent adaptive markets"),
 ]
 
 
@@ -508,7 +517,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
     sections: list[str] = []
 
     print(DIVIDER)
-    print("  DISTILLING QUANT RESEARCH METHODOLOGY FROM VAULT  (12 topics)")
+    print("  DISTILLING QUANT RESEARCH METHODOLOGY FROM VAULT  (14 topics)")
     print(f"  Plan: {_PLAN_MODEL}  |  Write: {_WRITE_MODEL}")
     print(DIVIDER)
 
