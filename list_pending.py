@@ -76,7 +76,7 @@ def main() -> None:
         print(len(pending))
         return
 
-    print(json.dumps(pending, indent=2, ensure_ascii=False))
+    sys.stdout.buffer.write(json.dumps(pending, indent=2, ensure_ascii=False).encode("utf-8") + b"\n")
     print(f"# {len(pending)} papers pending full analysis", file=sys.stderr)
 
 

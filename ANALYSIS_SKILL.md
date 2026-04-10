@@ -118,7 +118,51 @@ Rate 1-5 and explain: relevant for HKEX / H-shares / Hang Seng constituents?
 
 ## Relevance Score
 Novelty: X/5 | Feasibility: X/5 | Crypto: X/5 | HK Equity: X/5
+
+*(Use rubric below — cite "ANALYSIS_SKILL v1" when scoring)*
 ```
+
+---
+
+## Scoring Rubric (v1) — cite this before assigning any score
+
+Scores without this rubric are meaningless. Every paper analysis MUST reference "v1" and apply these criteria exactly.
+
+### Novelty (how original is the contribution?)
+| Score | Criteria |
+|-------|----------|
+| 5/5 | Genuinely new mechanism; first-principles derivation with natural experiment; opens a new research direction |
+| 4/5 | New application of known technique with substantial original contribution; new asset class + significant modification |
+| 3/5 | Incremental improvement on existing method; new dataset but similar technique |
+| 2/5 | Marginal variant of widely-known approach; engineering contribution only |
+| 1/5 | Restatement of textbook material; no novel contribution |
+
+### Feasibility (given: Python + standard quant infra + Bloomberg/Refinitiv + $10K–$10M AUM)
+| Score | Criteria |
+|-------|----------|
+| 5/5 | Deploy within 1 week; off-shelf libraries; public data; positive live-market track record |
+| 4/5 | 2–4 week implementation; standard data sources; minor calibration |
+| 3/5 | 1–2 month build; specialized data (LOB, alt data); significant engineering |
+| 2/5 | 3–6 month build; expensive proprietary data; ML/infra expertise required |
+| 1/5 | Research-only; quantum/satellite data/institutional-only infra required |
+
+### Crypto Applicability (primary: BTC/ETH/SOL major perps; secondary: mid-cap alts)
+| Score | Criteria |
+|-------|----------|
+| 5/5 | Tested on crypto OR direct mechanic applies; minimal adaptations; positive P&L demonstrated |
+| 4/5 | High structural fit; minor adaptations for 24/7, funding rate, thin books; likely profitable after calibration |
+| 3/5 | Moderate fit; significant adaptations required; plausible but unproven on crypto |
+| 2/5 | Weak fit; mechanism partially applicable; most adaptations create new untested assumptions |
+| 1/5 | Not applicable; mechanism specific to equities/rates/other asset class |
+
+### HK Equity Applicability (primary: HSI constituents, H-shares, HKEX listed large-cap)
+| Score | Criteria |
+|-------|----------|
+| 5/5 | Tested on HK/Asia equities OR directly analogous; regulatory constraints (SFC, stamp duty) satisfied |
+| 4/5 | High fit; minor adaptations for HKEX microstructure, lot sizes, stamp duty (0.1%/side) |
+| 3/5 | Moderate fit; requires HK-specific recalibration; plausible on liquid HSI names |
+| 2/5 | Weak fit; structural frictions (stamp duty, SFC short-selling list, T+2) significantly impair the strategy |
+| 1/5 | Not applicable to HK equity structure |
 
 ---
 
