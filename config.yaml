@@ -24,6 +24,8 @@ profiles:
       - q-fin.RM   # Risk Management
       - q-fin.CP   # Computational Finance
       - q-fin.MF   # Mathematical Finance
+      - q-fin.GN   # General Finance
+      - q-fin.EC   # Economics (cross-listed quant papers)
     keywords: []   # no filter — include all q-fin papers
 
   ml_for_finance:
@@ -32,6 +34,8 @@ profiles:
     categories:
       - stat.ML
       - cs.LG
+      - econ.EM   # Econometrics — regression, time series, causal inference
+      - stat.AP   # Statistics Applications — often finance/economics
     keywords:
       - portfolio
       - trading
@@ -51,6 +55,12 @@ profiles:
       - pairs trading
       - market making
       - order book
+      - forecasting
+      - time series
+      - financial market
+      - hedge fund
+      - arbitrage
+      - liquidity
 
   econophysics:
     enabled: true
@@ -58,6 +68,8 @@ profiles:
     categories:
       - physics.soc-ph     # Physics and Society
       - cond-mat.stat-mech # Statistical Mechanics
+      - nlin.AO            # Nonlinear Sciences — Adaptation and Self-Organizing Systems
+      - physics.data-an    # Data Analysis, Statistics and Probability
     keywords:
       - econophysics
       - power law
@@ -78,6 +90,18 @@ profiles:
       - self-organized
       - stock market
       - price dynamics
+      - random matrix
+      - correlation matrix
+      - complex system
+      - market impact
+      - price impact
+      - stochastic volatility
+      - fractal market
+      - Mandelbrot
+      - Brownian motion
+      - Lévy flight
+      - entropy
+      - nonlinear dynamics
 
   reinforcement_learning:
     enabled: true
@@ -85,6 +109,7 @@ profiles:
     categories:
       - cs.AI
       - cs.LG
+      - cs.NE   # Neural and Evolutionary Computing — genetic/evolutionary trading algos
     keywords:
       - reinforcement learning
       - deep reinforcement learning
@@ -99,6 +124,12 @@ profiles:
       - reward shaping
       - market simulation
       - algorithmic trading
+      - multi-agent
+      - deep learning trading
+      - execution optimization
+      - optimal execution
+      - limit order book
+      - market microstructure agent
 
 # Fetch settings
 max_papers_per_run: 30
