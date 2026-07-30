@@ -20,7 +20,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import chromadb
@@ -28,13 +28,16 @@ import yaml
 
 # ── UTF-8 stdout fix ──────────────────────────────────────────────────────────
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "config.yaml"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -60,8 +63,14 @@ def get_db(cfg: dict) -> sqlite3.Connection:
 DIVIDER = "\u2501" * 60  # ━━━...
 
 
-def print_paper(rank_or_score: str, title: str, arxiv_id: str,
-                published: str, categories: str, excerpt: str) -> None:
+def print_paper(
+    rank_or_score: str,
+    title: str,
+    arxiv_id: str,
+    published: str,
+    categories: str,
+    excerpt: str,
+) -> None:
     print(f"\n\u2501\u2501\u2501 [{rank_or_score}] {title[:70]} \u2501\u2501\u2501")
     date_str = published[:7] if published else "unknown"
     print(f"arXiv: {arxiv_id} | {date_str} | {categories}")
@@ -72,6 +81,7 @@ def print_paper(rank_or_score: str, title: str, arxiv_id: str,
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
+
 
 def do_search(cfg: dict, query: str, n: int = 8) -> list[dict]:
     collection = get_collection(cfg)
@@ -91,15 +101,17 @@ def do_search(cfg: dict, query: str, n: int = 8) -> list[dict]:
         results["metadatas"][0],
         results["distances"][0],
     ):
-        papers.append({
-            "arxiv_id": meta.get("arxiv_id", ""),
-            "title": meta.get("title", ""),
-            "categories": meta.get("categories", ""),
-            "published": meta.get("published", ""),
-            "vault_path": meta.get("vault_path", ""),
-            "relevance_score": round(1 - dist, 3),
-            "excerpt": doc[:400],
-        })
+        papers.append(
+            {
+                "arxiv_id": meta.get("arxiv_id", ""),
+                "title": meta.get("title", ""),
+                "categories": meta.get("categories", ""),
+                "published": meta.get("published", ""),
+                "vault_path": meta.get("vault_path", ""),
+                "relevance_score": round(1 - dist, 3),
+                "excerpt": doc[:400],
+            }
+        )
     return papers
 
 
@@ -122,6 +134,7 @@ def cmd_search(cfg: dict, query: str) -> None:
 
 
 # ── Alpha ideas via Claude ────────────────────────────────────────────────────
+
 
 def cmd_alpha_ideas(cfg: dict, topic: str) -> None:
     print(f'\nGenerating alpha ideas for: "{topic}"')
@@ -152,13 +165,14 @@ def cmd_alpha_ideas(cfg: dict, topic: str) -> None:
         f"2. Data required (source, frequency)\n"
         f"3. Expected holding period\n"
         f"4. Key risk and failure mode\n\n"
-        f"{'=' * 40}\n\n"
-        + "\n\n".join(paper_summaries)
+        f"{'=' * 40}\n\n" + "\n\n".join(paper_summaries)
     )
 
     claude_bin = shutil.which("claude")
     if not claude_bin:
-        print("ERROR: 'claude' CLI not found. Install it via: npm install -g @anthropic-ai/claude-code")
+        print(
+            "ERROR: 'claude' CLI not found. Install it via: npm install -g @anthropic-ai/claude-code"
+        )
         return
 
     model = cfg.get("claude_model", "claude-haiku-4-5-20251001")
@@ -183,6 +197,7 @@ def cmd_alpha_ideas(cfg: dict, topic: str) -> None:
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
+
 
 def cmd_stats(cfg: dict) -> None:
     conn = get_db(cfg)
@@ -216,6 +231,7 @@ def cmd_stats(cfg: dict) -> None:
     all_cats: dict[str, int] = {}
     for (cats_json,) in conn.execute("SELECT categories FROM papers").fetchall():
         import json
+
         try:
             cats = json.loads(cats_json)
         except Exception:
@@ -248,6 +264,7 @@ def cmd_stats(cfg: dict) -> None:
 
 # ── Related papers ────────────────────────────────────────────────────────────
 
+
 def cmd_related(cfg: dict, arxiv_id: str) -> None:
     conn = get_db(cfg)
     row = conn.execute(
@@ -260,7 +277,7 @@ def cmd_related(cfg: dict, arxiv_id: str) -> None:
         return
 
     title, abstract = row
-    print(f'\nFinding papers related to: {title}')
+    print(f"\nFinding papers related to: {title}")
     query = f"{title} {abstract[:300]}"
     papers = do_search(cfg, query, n=8)
 
@@ -285,18 +302,22 @@ def cmd_related(cfg: dict, arxiv_id: str) -> None:
 
 # ── Daily papers ──────────────────────────────────────────────────────────────
 
+
 def cmd_daily(cfg: dict) -> None:
     conn = get_db(cfg)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT arxiv_id, title, categories, published, abstract
         FROM papers
         WHERE substr(fetched_at, 1, 10) >= ?
         ORDER BY published DESC
         LIMIT 50
-    """, (yesterday,)).fetchall()
+    """,
+        (yesterday,),
+    ).fetchall()
     conn.close()
 
     if not rows:
@@ -306,6 +327,7 @@ def cmd_daily(cfg: dict) -> None:
     print(f"\n{len(rows)} papers fetched in the last 24 hours:\n")
     for r in rows:
         import json
+
         try:
             cats = ", ".join(json.loads(r[2]))
         except Exception:
@@ -315,6 +337,7 @@ def cmd_daily(cfg: dict) -> None:
 
 
 # ── Top crypto papers ─────────────────────────────────────────────────────────
+
 
 def _extract_crypto_score(content: str) -> float:
     """Extract numeric crypto applicability score from vault file."""
@@ -354,10 +377,11 @@ def cmd_top_crypto(cfg: dict, n: int) -> None:
     top = scored[:n]
 
     if not top:
-        print(f"No crypto-scored papers found (need Phase 2 processing).")
+        print("No crypto-scored papers found (need Phase 2 processing).")
         return
 
     import json
+
     print(f"\nTop {len(top)} papers by Crypto Applicability score:\n")
     for score, r in top:
         try:
@@ -370,6 +394,7 @@ def cmd_top_crypto(cfg: dict, n: int) -> None:
 
 # ── Export to markdown ────────────────────────────────────────────────────────
 
+
 def cmd_export(cfg: dict, query: str, output_file: str) -> None:
     papers = do_search(cfg, query, n=20)
     if not papers:
@@ -378,20 +403,22 @@ def cmd_export(cfg: dict, query: str, output_file: str) -> None:
 
     lines = [
         f"# Quant Vault Export: {query}",
-        f"",
+        "",
         f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  ",
         f"Results: {len(papers)} papers",
-        f"",
+        "",
         "---",
         "",
     ]
     for p in papers:
         lines.append(f"## [{p['relevance_score']:.2f}] {p['title']}")
-        lines.append(f"")
-        lines.append(f"- **arXiv:** [{p['arxiv_id']}](https://arxiv.org/abs/{p['arxiv_id']})")
+        lines.append("")
+        lines.append(
+            f"- **arXiv:** [{p['arxiv_id']}](https://arxiv.org/abs/{p['arxiv_id']})"
+        )
         lines.append(f"- **Published:** {p['published'][:10]}")
         lines.append(f"- **Categories:** {p['categories']}")
-        lines.append(f"")
+        lines.append("")
 
         # Try to include full vault file
         if p["vault_path"]:
@@ -401,7 +428,7 @@ def cmd_export(cfg: dict, query: str, output_file: str) -> None:
                 # Strip YAML frontmatter
                 if content.startswith("---"):
                     end = content.find("---", 3)
-                    content = content[end + 3:].strip() if end > 0 else content
+                    content = content[end + 3 :].strip() if end > 0 else content
                 lines.append(content)
             else:
                 lines.append(p["excerpt"])
@@ -420,54 +447,82 @@ def cmd_export(cfg: dict, query: str, output_file: str) -> None:
 
 _DISTILL_TOPICS = [
     # ── Foundational methodology ───────────────────────────────────────────────
-    ("idea_generation",
-     "how researchers generate trading strategy ideas, hypothesis formation, "
-     "identifying anomalies, cross-disciplinary methods, data-driven discovery"),
-    ("mathematical_verification",
-     "statistical testing methodology, information coefficient, t-statistics, "
-     "bootstrap permutation test, multiple testing correction, deflated Sharpe, "
-     "out-of-sample validation, p-hacking"),
-    ("signal_construction",
-     "signal construction, feature engineering, cross-sectional ranking, "
-     "winsorization, normalization, look-ahead bias prevention, alternative data"),
-    ("backtesting",
-     "backtesting methodology, transaction costs modeling, turnover, Sharpe ratio, "
-     "survivorship bias, point-in-time data, walk-forward, regime conditioning"),
-    ("failure_modes",
-     "overfitting strategies, data mining bias, regime change, crowding, "
-     "strategy failure modes, alpha decay, why strategies stop working"),
+    (
+        "idea_generation",
+        "how researchers generate trading strategy ideas, hypothesis formation, "
+        "identifying anomalies, cross-disciplinary methods, data-driven discovery",
+    ),
+    (
+        "mathematical_verification",
+        "statistical testing methodology, information coefficient, t-statistics, "
+        "bootstrap permutation test, multiple testing correction, deflated Sharpe, "
+        "out-of-sample validation, p-hacking",
+    ),
+    (
+        "signal_construction",
+        "signal construction, feature engineering, cross-sectional ranking, "
+        "winsorization, normalization, look-ahead bias prevention, alternative data",
+    ),
+    (
+        "backtesting",
+        "backtesting methodology, transaction costs modeling, turnover, Sharpe ratio, "
+        "survivorship bias, point-in-time data, walk-forward, regime conditioning",
+    ),
+    (
+        "failure_modes",
+        "overfitting strategies, data mining bias, regime change, crowding, "
+        "strategy failure modes, alpha decay, why strategies stop working",
+    ),
     # ── Signal classes ─────────────────────────────────────────────────────────
-    ("momentum_trend",
-     "momentum factor, time series momentum, cross-sectional momentum, "
-     "trend following, CTA, 12-1 momentum, intermediate-horizon momentum"),
-    ("mean_reversion",
-     "mean reversion, pairs trading, statistical arbitrage, cointegration, "
-     "Ornstein-Uhlenbeck, convergence trading, basis trading, spread trading"),
-    ("volatility_trading",
-     "volatility forecasting, realized volatility, GARCH, HAR model, implied vol, "
-     "vol surface, variance risk premium, volatility regime, VIX"),
-    ("market_microstructure",
-     "market microstructure, order flow imbalance, Kyle lambda, price impact, "
-     "bid-ask spread, Amihud illiquidity, high frequency trading, execution"),
-    ("factor_models",
-     "factor model construction, Fama-French, risk premia, factor zoo, "
-     "multi-factor portfolio, factor timing, factor exposure, smart beta"),
+    (
+        "momentum_trend",
+        "momentum factor, time series momentum, cross-sectional momentum, "
+        "trend following, CTA, 12-1 momentum, intermediate-horizon momentum",
+    ),
+    (
+        "mean_reversion",
+        "mean reversion, pairs trading, statistical arbitrage, cointegration, "
+        "Ornstein-Uhlenbeck, convergence trading, basis trading, spread trading",
+    ),
+    (
+        "volatility_trading",
+        "volatility forecasting, realized volatility, GARCH, HAR model, implied vol, "
+        "vol surface, variance risk premium, volatility regime, VIX",
+    ),
+    (
+        "market_microstructure",
+        "market microstructure, order flow imbalance, Kyle lambda, price impact, "
+        "bid-ask spread, Amihud illiquidity, high frequency trading, execution",
+    ),
+    (
+        "factor_models",
+        "factor model construction, Fama-French, risk premia, factor zoo, "
+        "multi-factor portfolio, factor timing, factor exposure, smart beta",
+    ),
     # ── Market-specific ────────────────────────────────────────────────────────
-    ("crypto_defi",
-     "cryptocurrency trading, Bitcoin, Ethereum, DeFi, on-chain data, "
-     "perpetual futures, funding rate, crypto momentum, altcoin, blockchain analytics"),
-    ("hk_asian_equity",
-     "Hong Kong equities, HKEX, Hang Seng, H-shares, A-shares, China market, "
-     "Asian market microstructure, ADR premium, southbound northbound connect"),
+    (
+        "crypto_defi",
+        "cryptocurrency trading, Bitcoin, Ethereum, DeFi, on-chain data, "
+        "perpetual futures, funding rate, crypto momentum, altcoin, blockchain analytics",
+    ),
+    (
+        "hk_asian_equity",
+        "Hong Kong equities, HKEX, Hang Seng, H-shares, A-shares, China market, "
+        "Asian market microstructure, ADR premium, southbound northbound connect",
+    ),
     # ── Domain cross-overs ─────────────────────────────────────────────────────
-    ("econophysics",
-     "econophysics power law fat tail Zipf Pareto Levy Hurst exponent long memory "
-     "multifractal agent-based model financial network log-periodic market crash "
-     "scaling law self-organized criticality return distribution"),
-    ("reinforcement_learning_trading",
-     "reinforcement learning trading deep RL Q-learning policy gradient DDPG PPO "
-     "actor-critic trading agent portfolio optimization order execution reward shaping "
-     "market simulation multi-agent adaptive markets"),
+    (
+        "econophysics",
+        "econophysics power law fat tail Zipf Pareto Levy Hurst exponent long memory "
+        "multifractal agent-based model financial network log-periodic market crash "
+        "scaling law self-organized criticality return distribution",
+    ),
+    (
+        "reinforcement_learning_trading",
+        "reinforcement learning trading deep RL Q-learning policy gradient DDPG PPO "
+        "actor-critic trading agent portfolio optimization order execution reward shaping "
+        "market simulation multi-agent adaptive markets",
+    ),
 ]
 
 
@@ -478,12 +533,16 @@ _WRITE_MODEL = "claude-sonnet-4-6"
 _distill_proc: "subprocess.Popen | None" = None
 
 
-def _run_claude(claude_bin: str, model: str, prompt: str, timeout: int = 300) -> str | None:
+def _run_claude(
+    claude_bin: str, model: str, prompt: str, timeout: int = 300
+) -> str | None:
     """Run claude CLI as a subprocess. One at a time — sequential, never parallel."""
     global _distill_proc
     proc = subprocess.Popen(
         [claude_bin, "--output-format", "text", "--model", model, "-p", "-"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     _distill_proc = proc
     try:
@@ -498,7 +557,9 @@ def _run_claude(claude_bin: str, model: str, prompt: str, timeout: int = 300) ->
     finally:
         _distill_proc = None
     if proc.returncode != 0:
-        print(f"  Claude error ({model}): {stderr[:200].decode('utf-8', errors='replace')}")
+        print(
+            f"  Claude error ({model}): {stderr[:200].decode('utf-8', errors='replace')}"
+        )
         return None
     return stdout.decode("utf-8", errors="replace").strip()
 
@@ -536,7 +597,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
         section_title = section_name.replace("_", " ").title()
 
         # ── Step 1: Opus plans the synthesis outline ──────────────────────────
-        print(f"  Opus planning outline...", flush=True)
+        print("  Opus planning outline...", flush=True)
         plan_prompt = (
             f"You are a senior quantitative researcher. Given these arXiv paper "
             f"excerpts on '{section_title}', create a concise synthesis outline.\n\n"
@@ -554,7 +615,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
             outline = "(no outline generated)"
 
         # ── Step 2: Sonnet writes the section from outline + excerpts ─────────
-        print(f"  Sonnet writing section...", flush=True)
+        print("  Sonnet writing section...", flush=True)
         write_prompt = (
             f"Write a 400-word methodology section on "
             f"**{section_title}** in quantitative finance.\n\n"
@@ -571,7 +632,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
             continue
 
         sections.append(f"## {section_title}\n\n{content}")
-        print(f"  Done.")
+        print("  Done.")
 
     if not sections:
         print("No sections generated.")
@@ -588,8 +649,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
         "> Auto-generated from arXiv quant-finance corpus via `python research.py --distill`\n"
         f"> Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n"
         f"> Based on {collection.count()} indexed papers\n\n"
-        "---\n\n"
-        + "\n\n---\n\n".join(sections)
+        "---\n\n" + "\n\n---\n\n".join(sections)
     )
     Path(out_file).write_text(content, encoding="utf-8")
     print(f"\n{DIVIDER}")
@@ -598,6 +658,7 @@ def cmd_distill(cfg: dict, output_path: str | None) -> None:
 
 
 # ── Snapshot ──────────────────────────────────────────────────────────────────
+
 
 def cmd_snapshot(cfg: dict, topic: str) -> None:
     """Synthesize vault knowledge on a specific topic into a focused doc.
@@ -616,12 +677,13 @@ def cmd_snapshot(cfg: dict, topic: str) -> None:
         return
 
     import re
+
     slug = re.sub(r"[^a-z0-9]+", "-", topic.lower()).strip("-")
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     print(DIVIDER)
     print(f"  SNAPSHOT: {topic}")
-    print(f"  Searching vault for top 12 relevant papers...")
+    print("  Searching vault for top 12 relevant papers...")
     print(DIVIDER)
 
     results = collection.query(query_texts=[topic], n_results=12)
@@ -679,11 +741,12 @@ def cmd_snapshot(cfg: dict, topic: str) -> None:
     print(f"\n{DIVIDER}")
     print(f"  Snapshot saved: {out_file}")
     print(f"  Use in Claude Code: @{out_file}")
-    print(f"  (Run `python sync.py` to make it searchable via MCP)")
+    print("  (Run `python sync.py` to make it searchable via MCP)")
     print(DIVIDER)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -704,23 +767,42 @@ Examples:
         """,
     )
     parser.add_argument("query", nargs="?", help="Search query")
-    parser.add_argument("--alpha-ideas", metavar="TOPIC",
-                        help="Generate alpha ideas for a topic via Claude")
+    parser.add_argument(
+        "--alpha-ideas",
+        metavar="TOPIC",
+        help="Generate alpha ideas for a topic via Claude",
+    )
     parser.add_argument("--stats", action="store_true", help="Show vault statistics")
     parser.add_argument("--related", metavar="ARXIV_ID", help="Find related papers")
     parser.add_argument("--daily", action="store_true", help="Show today's new papers")
-    parser.add_argument("--top-crypto", type=int, metavar="N",
-                        help="Top N papers by crypto applicability score")
-    parser.add_argument("--export", nargs=2, metavar=("QUERY", "OUTPUT"),
-                        help="Export search results to a markdown file")
-    parser.add_argument("--distill", nargs="?", const="", metavar="OUTPUT",
-                        help="Distill methodology guide from vault (optional output path)")
-    parser.add_argument("--snapshot", metavar="TOPIC",
-                        help="Synthesize vault knowledge on a specific topic into a focused doc")
+    parser.add_argument(
+        "--top-crypto",
+        type=int,
+        metavar="N",
+        help="Top N papers by crypto applicability score",
+    )
+    parser.add_argument(
+        "--export",
+        nargs=2,
+        metavar=("QUERY", "OUTPUT"),
+        help="Export search results to a markdown file",
+    )
+    parser.add_argument(
+        "--distill",
+        nargs="?",
+        const="",
+        metavar="OUTPUT",
+        help="Distill methodology guide from vault (optional output path)",
+    )
+    parser.add_argument(
+        "--snapshot",
+        metavar="TOPIC",
+        help="Synthesize vault knowledge on a specific topic into a focused doc",
+    )
     args = parser.parse_args()
 
     # Kill active claude subprocess on Ctrl+C
-    def _sigint(sig, frame):  # noqa: ANN001
+    def _sigint(sig, frame):
         if _distill_proc and _distill_proc.poll() is None:
             print("\n[research.py] Ctrl+C — terminating Claude process...", flush=True)
             _distill_proc.terminate()
@@ -729,6 +811,7 @@ Examples:
             except subprocess.TimeoutExpired:
                 _distill_proc.kill()
         sys.exit(1)
+
     signal.signal(signal.SIGINT, _sigint)
 
     cfg = load_config()

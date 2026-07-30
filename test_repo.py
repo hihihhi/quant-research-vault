@@ -12,7 +12,6 @@ Exit code 0 = all OK, 1 = failures found.
 """
 
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -52,10 +51,13 @@ def warn(name: str, detail: str = "") -> None:
 
 # ── 1. Python version ──────────────────────────────────────────────────────────
 
+
 def test_python() -> None:
     print("\n=== Python & Dependencies ===")
     ok = sys.version_info >= (3, 11)
-    check("Python >= 3.11", ok, f"got {sys.version_info.major}.{sys.version_info.minor}")
+    check(
+        "Python >= 3.11", ok, f"got {sys.version_info.major}.{sys.version_info.minor}"
+    )
 
     deps = ["yaml", "arxiv", "chromadb", "pdfplumber", "requests", "psutil"]
     for dep in deps:
@@ -68,12 +70,14 @@ def test_python() -> None:
     # MCP
     try:
         import mcp  # noqa: F401
+
         check("import mcp", True)
     except ImportError:
         check("import mcp", False, fix="pip install 'mcp[cli]'")
 
 
 # ── 2. Config file ─────────────────────────────────────────────────────────────
+
 
 def test_config() -> None:
     print("\n=== Configuration ===")
@@ -87,21 +91,30 @@ def test_config() -> None:
 
     vault = Path(cfg.get("vault_path", "")).expanduser()
     check("vault_path set", bool(cfg.get("vault_path")))
-    check("vault_path accessible", vault.exists() or True,
-          detail=f"{vault} (will be created on first run)")
+    check(
+        "vault_path accessible",
+        vault.exists() or True,
+        detail=f"{vault} (will be created on first run)",
+    )
 
-    db_path = ROOT / cfg.get("db_path", ".db/papers.sqlite")
     check("db_path configured", bool(cfg.get("db_path")))
 
-    check("claude_model set", bool(cfg.get("claude_model")),
-          detail=cfg.get("claude_model", "NOT SET"))
+    check(
+        "claude_model set",
+        bool(cfg.get("claude_model")),
+        detail=cfg.get("claude_model", "NOT SET"),
+    )
     profiles = cfg.get("profiles", {})
     enabled = [n for n, p in profiles.items() if p.get("enabled")]
-    check("profiles configured", bool(enabled),
-          detail=f"{len(enabled)} enabled: {', '.join(enabled)}")
+    check(
+        "profiles configured",
+        bool(enabled),
+        detail=f"{len(enabled)} enabled: {', '.join(enabled)}",
+    )
 
 
 # ── 3. Database ────────────────────────────────────────────────────────────────
+
 
 def test_database() -> None:
     print("\n=== Database ===")
@@ -109,20 +122,34 @@ def test_database() -> None:
         cfg = yaml.safe_load(f)
     db_path = ROOT / cfg["db_path"]
 
-    check("DB file exists", db_path.exists(),
-          fix="python fetch.py --dry-run  # initialises DB")
+    check(
+        "DB file exists",
+        db_path.exists(),
+        fix="python fetch.py --dry-run  # initialises DB",
+    )
     if not db_path.exists():
         return
 
     conn = sqlite3.connect(str(db_path))
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
     check("papers table exists", "papers" in tables)
 
     if "papers" in tables:
         total = conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
-        processed = conn.execute("SELECT COUNT(*) FROM papers WHERE processed=1").fetchone()[0]
-        check("has papers", total > 0, detail=f"{total:,} total, {processed:,} processed",
-              fix="python run.py --all-history --abstract-only")
+        processed = conn.execute(
+            "SELECT COUNT(*) FROM papers WHERE processed=1"
+        ).fetchone()[0]
+        check(
+            "has papers",
+            total > 0,
+            detail=f"{total:,} total, {processed:,} processed",
+            fix="python run.py --all-history --abstract-only",
+        )
 
         # Check schema has expected columns
         cols = {r[1] for r in conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -134,19 +161,22 @@ def test_database() -> None:
 
 # ── 4. ChromaDB ────────────────────────────────────────────────────────────────
 
+
 def test_chroma() -> None:
     print("\n=== ChromaDB Vector Index ===")
     with open(ROOT / "config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     chroma_path = ROOT / cfg["chroma_path"]
 
-    check("chroma dir exists", chroma_path.exists(),
-          fix="python sync.py  # builds index")
+    check(
+        "chroma dir exists", chroma_path.exists(), fix="python sync.py  # builds index"
+    )
     if not chroma_path.exists():
         return
 
     try:
         import chromadb
+
         client = chromadb.PersistentClient(path=str(chroma_path))
         col = client.get_or_create_collection("quant_papers")
         n = col.count()
@@ -158,11 +188,13 @@ def test_chroma() -> None:
             results = col.query(query_texts=["momentum factor"], n_results=3)
             check("semantic search works", len(results["documents"][0]) > 0)
     except Exception as e:
-        check("ChromaDB functional", False, detail=str(e),
-              fix="python sync.py --rebuild")
+        check(
+            "ChromaDB functional", False, detail=str(e), fix="python sync.py --rebuild"
+        )
 
 
 # ── 5. MCP server ─────────────────────────────────────────────────────────────
+
 
 def test_mcp() -> None:
     print("\n=== MCP Server ===")
@@ -175,8 +207,11 @@ def test_mcp() -> None:
         try:
             data = json.loads(claude_json.read_text(encoding="utf-8"))
             servers = data.get("mcpServers", {})
-            check("MCP registered in ~/.claude.json", "quant-research" in servers,
-                  fix="python install.py  # re-registers MCP")
+            check(
+                "MCP registered in ~/.claude.json",
+                "quant-research" in servers,
+                fix="python install.py  # re-registers MCP",
+            )
         except Exception as e:
             warn("~/.claude.json", f"parse error: {e}")
     else:
@@ -185,6 +220,7 @@ def test_mcp() -> None:
     # Quick syntax check
     try:
         import ast
+
         ast.parse(mcp_script.read_text(encoding="utf-8"))
         check("search_mcp.py syntax", True)
     except SyntaxError as e:
@@ -193,21 +229,30 @@ def test_mcp() -> None:
 
 # ── 6. Claude CLI ──────────────────────────────────────────────────────────────
 
+
 def test_claude_cli() -> None:
     print("\n=== Claude CLI ===")
     claude_bin = shutil.which("claude")
-    check("claude CLI installed", bool(claude_bin),
-          fix="npm install -g @anthropic-ai/claude-code  (or install via desktop app)")
+    check(
+        "claude CLI installed",
+        bool(claude_bin),
+        fix="npm install -g @anthropic-ai/claude-code  (or install via desktop app)",
+    )
     if not claude_bin:
         return
 
     try:
         result = subprocess.run(
             [claude_bin, "--version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
-        check("claude --version", result.returncode == 0,
-              detail=result.stdout.strip()[:80])
+        check(
+            "claude --version",
+            result.returncode == 0,
+            detail=result.stdout.strip()[:80],
+        )
     except subprocess.TimeoutExpired:
         check("claude --version", False, detail="timeout")
     except Exception as e:
@@ -216,11 +261,21 @@ def test_claude_cli() -> None:
 
 # ── 7. Script syntax ───────────────────────────────────────────────────────────
 
+
 def test_syntax() -> None:
     print("\n=== Script Syntax ===")
     import ast
-    for script in ["fetch.py", "process.py", "sync.py", "run.py",
-                   "research.py", "search_mcp.py", "master.py", "install.py"]:
+
+    for script in [
+        "fetch.py",
+        "process.py",
+        "sync.py",
+        "run.py",
+        "research.py",
+        "search_mcp.py",
+        "master.py",
+        "install.py",
+    ]:
         path = ROOT / script
         if not path.exists():
             warn(f"{script}", "not found")
@@ -234,6 +289,7 @@ def test_syntax() -> None:
 
 # ── 8. Vault directory ────────────────────────────────────────────────────────
 
+
 def test_vault() -> None:
     print("\n=== Vault Files ===")
     with open(ROOT / "config.yaml", encoding="utf-8") as f:
@@ -244,27 +300,40 @@ def test_vault() -> None:
 
     check("vault dir exists", vault.exists())
     check("research dir exists", research_dir.exists())
-    check("guidelines dir exists", guidelines_dir.exists(),
-          fix="mkdir -p ~/Documents/ClaudeVault/guidelines")
+    check(
+        "guidelines dir exists",
+        guidelines_dir.exists(),
+        fix="mkdir -p ~/Documents/ClaudeVault/guidelines",
+    )
 
     if research_dir.exists():
         md_files = list(research_dir.rglob("*.md"))
-        check("has vault .md files", len(md_files) > 0,
-              detail=f"{len(md_files):,} markdown files",
-              fix="python run.py --all-history --abstract-only")
+        check(
+            "has vault .md files",
+            len(md_files) > 0,
+            detail=f"{len(md_files):,} markdown files",
+            fix="python run.py --all-history --abstract-only",
+        )
 
     distilled = guidelines_dir / "quant-methodology-distilled.md"
     if distilled.exists():
         wc = len(distilled.read_text(encoding="utf-8").split())
         check("distilled methodology exists", True, detail=f"{wc:,} words")
-        check("distilled methodology quality", wc >= 2000,
-              detail=f"{wc} words (need >= 2000)",
-              fix="python research.py --distill")
+        check(
+            "distilled methodology quality",
+            wc >= 2000,
+            detail=f"{wc} words (need >= 2000)",
+            fix="python research.py --distill",
+        )
     else:
-        warn("distilled methodology", "not yet generated — run: python research.py --distill")
+        warn(
+            "distilled methodology",
+            "not yet generated — run: python research.py --distill",
+        )
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────
+
 
 def print_summary() -> int:
     total = len(results)
