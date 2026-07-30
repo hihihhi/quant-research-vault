@@ -19,11 +19,12 @@ The pipeline separates early abstract-only indexing from later model-assisted en
 ## Run it
 ```text
 python -m pip install -r requirements.txt
-python test_repo.py
+python run.py --help
+python research.py --help
 python run.py --all-history --abstract-only
 python research.py --stats
 ```
-The retrieval command is operator-initiated and may call upstream APIs; API access, rate limits, optional credentials, and generated local state are environment-dependent. Do not commit generated data, keys, or local endpoints.
+The two operational commands are operator-initiated and may call upstream APIs; API access, rate limits, optional credentials, and generated local state are environment-dependent. `python test_repo.py` is a stateful health check for an already initialized local database/index, not a clean-clone test. Do not commit generated data, keys, or local endpoints.
 
 ## Status
 Active public-source preparation. Any generated index, database, PDFs, exports, model outputs, and methodology artifacts are local artifacts whose provenance is not established by this repository checkout. Validate source records, licenses, transformations, and experimental methodology independently before relying on any output.
