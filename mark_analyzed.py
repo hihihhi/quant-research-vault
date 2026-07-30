@@ -39,7 +39,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Mark paper as fully analyzed")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("arxiv_id", help="arXiv ID (e.g. 2401.12345)")
-    parser.add_argument("vault_path", nargs="?", help="Path to vault .md file (optional)")
+    parser.add_argument(
+        "vault_path", nargs="?", help="Path to vault .md file (optional)"
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -52,7 +54,10 @@ def main() -> None:
             "SELECT vault_path FROM papers WHERE arxiv_id=?", (args.arxiv_id,)
         ).fetchone()
         if not row or not row[0]:
-            print(f"ERROR: {args.arxiv_id} not found in DB or has no vault_path", file=sys.stderr)
+            print(
+                f"ERROR: {args.arxiv_id} not found in DB or has no vault_path",
+                file=sys.stderr,
+            )
             conn.close()
             sys.exit(1)
         vp = row[0]

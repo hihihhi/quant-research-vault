@@ -23,7 +23,9 @@ import yaml
 
 # ── UTF-8 stdout fix ──────────────────────────────────────────────────────────
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent
 
@@ -55,14 +57,18 @@ def fail(msg: str) -> None:
 
 # ── 1. Python version check ───────────────────────────────────────────────────
 
+
 def check_python() -> None:
     step("Checking Python version...")
     if sys.version_info < (3, 11):
         fail(f"Python >= 3.11 required. You have {sys.version}. Please upgrade.")
-    ok(f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+    ok(
+        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
 
 
 # ── 2. pip install ────────────────────────────────────────────────────────────
+
 
 def install_requirements() -> None:
     step("Installing requirements...")
@@ -77,6 +83,7 @@ def install_requirements() -> None:
 
 
 # ── 3. Create vault directory tree ───────────────────────────────────────────
+
 
 def create_vault_dirs(cfg: dict) -> None:
     step("Creating vault directory tree...")
@@ -105,14 +112,18 @@ def create_vault_dirs(cfg: dict) -> None:
 
 # ── 4. Initialise SQLite DB ───────────────────────────────────────────────────
 
+
 def init_db(cfg: dict) -> None:
     step("Initialising SQLite database...")
     db_path = cfg["db_path"]
     result = subprocess.run(
-        [sys.executable, "-c",
-         f"import sys; sys.path.insert(0, r'{ROOT}'); "
-         f"import fetch; fetch.init_db(r'{db_path}'); "
-         f"print('DB initialised at {db_path}')"],
+        [
+            sys.executable,
+            "-c",
+            f"import sys; sys.path.insert(0, r'{ROOT}'); "
+            f"import fetch; fetch.init_db(r'{db_path}'); "
+            f"print('DB initialised at {db_path}')",
+        ],
         capture_output=False,
     )
     if result.returncode != 0:
@@ -121,6 +132,7 @@ def init_db(cfg: dict) -> None:
 
 
 # ── 5. Wire MCP server into ~/.claude.json ────────────────────────────────────
+
 
 def wire_mcp(cfg: dict) -> None:
     step("Wiring MCP server into ~/.claude.json...")
@@ -152,6 +164,7 @@ def wire_mcp(cfg: dict) -> None:
         }
     else:
         import shutil as _shutil
+
         python_bin = _shutil.which("python3") or _shutil.which("python") or "python3"
         server_config = {
             "type": "stdio",
@@ -171,13 +184,15 @@ def wire_mcp(cfg: dict) -> None:
 
 # ── 6. Windows Task Scheduler daily job ──────────────────────────────────────
 
+
 def create_scheduled_task() -> None:
     if sys.platform != "win32":
         step("Daily job (non-Windows)...")
         run_script = ROOT / "run.py"
         import shutil as _shutil
+
         python_bin = _shutil.which("python3") or "python3"
-        print(f"    Add to crontab (run: crontab -e):")
+        print("    Add to crontab (run: crontab -e):")
         print(f"    0 6 * * * cd {ROOT} && {python_bin} {run_script}")
         return
 
@@ -188,25 +203,35 @@ def create_scheduled_task() -> None:
 
     result = subprocess.run(
         [
-            "schtasks", "/create",
-            "/tn", "QuantResearchVault-Daily",
-            "/tr", task_cmd,
-            "/sc", "daily",
-            "/st", "06:00",
+            "schtasks",
+            "/create",
+            "/tn",
+            "QuantResearchVault-Daily",
+            "/tr",
+            task_cmd,
+            "/sc",
+            "daily",
+            "/st",
+            "06:00",
             "/f",
         ],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        warn(f"Task Scheduler setup failed (may need admin rights): {result.stderr.strip()}")
-        warn("You can run this manually: schtasks /create /tn QuantResearchVault-Daily "
-             f'/tr "{task_cmd}" /sc daily /st 06:00 /f')
+        warn(
+            f"Task Scheduler setup failed (may need admin rights): {result.stderr.strip()}"
+        )
+        warn(
+            "You can run this manually: schtasks /create /tn QuantResearchVault-Daily "
+            f'/tr "{task_cmd}" /sc daily /st 06:00 /f'
+        )
     else:
         ok("Scheduled task 'QuantResearchVault-Daily' created (runs daily at 06:00).")
 
 
 # ── What to do next ───────────────────────────────────────────────────────────
+
 
 def print_next_steps() -> None:
     print("\n" + "=" * 60)
@@ -236,6 +261,7 @@ def print_next_steps() -> None:
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     print("=" * 60)
