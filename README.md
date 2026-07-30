@@ -1,30 +1,60 @@
 # Quant Research Vault
 
-## One sentence
-A local research pipeline that collects selected academic-paper metadata, organizes it for retrieval, and supports optional model-assisted analysis.
+A local Python pipeline that retrieves configured academic-paper metadata, stores it in SQLite, indexes processed records in ChromaDB, and exposes read-only retrieval through an MCP server.
 
-## Result
-No headline result. IS performance: unknown. OOS performance: unknown. The committed public source contains pipeline code and configuration, but no reproducible public corpus, benchmark, backtest, or performance metric; therefore no research or trading result is claimed here. Source status: arXiv and OpenAlex are enabled in the committed configuration; Semantic Scholar is configured but disabled by default. The public checkout includes no paper sample or retained query output.
+## Status & honesty
 
-## How it works
-- `fetch.py` retrieves configured metadata.
-- `process.py` writes local paper records.
-- `sync.py` builds a local ChromaDB index.
-- `research.py` exposes CLI retrieval and synthesis commands.
-- `run.py` and `master.py` coordinate the stages; source availability and coverage depend on upstream APIs and the selected profile.
+Active research-infrastructure project. No trading, predictive, or benchmark performance result is retained in this public checkout. In-sample result: UNKNOWN. Out-of-sample result: UNKNOWN. The exact scale of **18,492 papers** is UNKNOWN: no committed database, retained query output, or reproducible public corpus in this repository confirms it. Generated databases, vector indexes, PDFs, exports, and optional model outputs are local-only and intentionally ignored.
+
+## Architecture
+
+- `fetch.py` queries configured arXiv categories and optional OpenAlex; Semantic Scholar is configured but disabled by default. Records are persisted in SQLite using `INSERT OR IGNORE` keyed by paper ID.
+- arXiv HTTP 429 retries use exponential waits of 60, 120, 240, and 480 seconds; HTTP 500 retries wait 30, 60, 90, and 120 seconds.
+- `process.py` optionally enriches local records; `sync.py` indexes processed records in ChromaDB and skips IDs already present.
+- `search_mcp.py` provides read-only semantic search and stats over ChromaDB/SQLite, with a temporary PID lock to reject another live MCP instance and clear stale locks.
+- `run.py` orchestrates fetch → process → sync; `master.py` coordinates longer, restartable source and distillation stages.
+
+```mermaid
+flowchart LR
+  A[arXiv / OpenAlex] --> B[fetch.py]
+  B --> C[(SQLite)]
+  C --> D[process.py]
+  D --> E[sync.py]
+  E --> F[(ChromaDB)]
+  C --> G[search_mcp.py]
+  F --> G
+  G --> H[Read-only MCP tools]
+```
 
 ## The interesting decision
-The pipeline separates early abstract-only indexing from later model-assisted enrichment, making a local corpus searchable before optional full-text/model analysis. This is a workflow choice, not evidence of signal quality, economic value, or live-trading suitability.
+
+The project decouples abstract-only indexing from optional full-text/model-assisted enrichment. This makes a locally retrieved corpus searchable before the slower enrichment stage; the trade-off is that early retrieval quality is limited to metadata and abstracts, while later enrichment requires local files and optional model tooling.
+
+## Provenance
+
+- arXiv and OpenAlex are the configured upstream metadata sources (`config.yaml`, `fetch.py`); their availability, coverage, licenses, and API limits remain upstream concerns.
+- SQLite is the local state store and ChromaDB is the local vector index (`fetch.py`, `sync.py`, `search_mcp.py`).
+- The MCP server is local and read-only with respect to the retrieval interface (`search_mcp.py`).
+- Repository license: **UNKNOWN**. This checkout has no `LICENSE` file, and provenance/rights for every contribution and generated artifact were not established here.
 
 ## Run it
-```text
-python -m pip install -r requirements.txt
-python run.py --help
-python research.py --help
-python run.py --all-history --abstract-only
-python research.py --stats
-```
-The two operational commands are operator-initiated and may call upstream APIs; API access, rate limits, optional credentials, and generated local state are environment-dependent. `python test_repo.py` is a stateful health check for an already initialized local database/index, not a clean-clone test. Do not commit generated data, keys, or local endpoints.
 
-## Status
-Active public-source preparation. Any generated index, database, PDFs, exports, model outputs, and methodology artifacts are local artifacts whose provenance is not established by this repository checkout. Validate source records, licenses, transformations, and experimental methodology independently before relying on any output.
+```bash
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt ruff mypy pytest
+.venv\Scripts\ruff check .
+.venv\Scripts\ruff format --check .
+.venv\Scripts\mypy
+.venv\Scripts\pytest -q
+.venv\Scripts\python run.py --fetch-only --dry-run
+.venv\Scripts\python search_mcp.py --help
+```
+
+The dry run makes live upstream requests but is intended not to persist fetched records. Run `python run.py --help` before any stateful ingestion command.
+
+## Limitations
+
+- No committed corpus, database, ChromaDB index, or result log permits independent verification of a paper count, coverage, retrieval quality, or any research performance claim.
+- Upstream API schema, rate-limit, and availability changes can affect ingestion.
+- The PID lock is a local single-instance guard, not a distributed lock.
+- Optional enrichment depends on local files and model/tool configuration; it is not exercised by the clean-clone quality suite.
