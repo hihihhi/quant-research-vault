@@ -12,7 +12,7 @@ Active research-infrastructure project. No trading, predictive, or benchmark per
 - arXiv HTTP 429 retries use exponential waits of 60, 120, 240, and 480 seconds; HTTP 500 retries wait 30, 60, 90, and 120 seconds.
 - `process.py` optionally enriches local records; `sync.py` indexes processed records in ChromaDB and skips IDs already present.
 - `search_mcp.py` provides read-only semantic search and stats over ChromaDB/SQLite, with a temporary PID lock to reject another live MCP instance and clear stale locks.
-- `run.py` orchestrates fetch → process → sync; `master.py` coordinates longer, restartable source and distillation stages.
+- `run.py` orchestrates fetch -> process -> sync; `master.py` coordinates longer, restartable source and distillation stages.
 
 ```mermaid
 flowchart LR
@@ -39,15 +39,15 @@ The project decouples abstract-only indexing from optional full-text/model-assis
 
 ## Run it
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt ruff mypy pytest
-.venv\Scripts\ruff check .
-.venv\Scripts\ruff format --check .
-.venv\Scripts\mypy
-.venv\Scripts\pytest -q
-.venv\Scripts\python run.py --fetch-only --dry-run
-.venv\Scripts\python search_mcp.py --help
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt ruff mypy pytest
+& .\.venv\Scripts\ruff.exe check .
+& .\.venv\Scripts\ruff.exe format --check .
+& .\.venv\Scripts\mypy.exe
+& .\.venv\Scripts\pytest.exe -q
+& .\.venv\Scripts\python.exe run.py --fetch-only --dry-run
+& .\.venv\Scripts\python.exe search_mcp.py --help
 ```
 
 The dry run makes live upstream requests but is intended not to persist fetched records. Run `python run.py --help` before any stateful ingestion command.
