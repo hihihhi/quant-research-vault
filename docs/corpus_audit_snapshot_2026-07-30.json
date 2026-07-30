@@ -1,0 +1,33 @@
+{
+  "schema_version": "quant-research-vault.corpus-audit-snapshot.v1",
+  "generated_at": "2026-07-30T19:46:22.9960819+08:00",
+  "source": {
+    "relative_path": ".db/papers.sqlite",
+    "published": false,
+    "size_bytes": 33161216,
+    "sha256": "acb1a76ee2bf575fa083c807be39b66b34c040a6b9697a297b1e0dc0a0e7ab13",
+    "last_write_time_local": "2026-04-10T11:26:14+08:00"
+  },
+  "queries": [
+    {
+      "sql": "SELECT count(*) FROM papers",
+      "result": 18492
+    },
+    {
+      "sql": "SELECT processed, count(*) FROM papers GROUP BY processed",
+      "result": [
+        [
+          1,
+          18492
+        ]
+      ]
+    }
+  ],
+  "interpretation": {
+    "metric": "rows in the local papers SQLite table at audit time",
+    "sample_status": "unknown",
+    "quality_claim": false,
+    "reproducible_from_public_checkout": false,
+    "processed_semantics": "The code uses processed to mean that an entry was written; it does not prove complete analysis."
+  }
+}
