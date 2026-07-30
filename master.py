@@ -22,8 +22,6 @@ Usage:
 
 import argparse
 import json
-import os
-import shutil
 import signal
 import sqlite3
 import subprocess
@@ -35,7 +33,9 @@ from pathlib import Path
 import yaml
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent
 PROGRESS_FILE = ROOT / ".db" / "master_progress.json"
@@ -59,6 +59,7 @@ _active_proc: "subprocess.Popen | None" = None
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
+
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
@@ -71,6 +72,7 @@ def log(msg: str) -> None:
 
 
 # ── Progress ──────────────────────────────────────────────────────────────────
+
 
 def load_progress() -> dict:
     if PROGRESS_FILE.exists():
@@ -88,6 +90,7 @@ def save_progress(p: dict) -> None:
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 
 def load_config() -> dict:
     with open(ROOT / "config.yaml", encoding="utf-8") as f:
@@ -121,6 +124,7 @@ def pending_count() -> int:
 
 # ── Subprocess runner ─────────────────────────────────────────────────────────
 
+
 def run_step(cmd: list[str], timeout: int = 7200, label: str = "") -> int:
     global _active_proc
     log(f"Running: {' '.join(cmd)}" + (f" [{label}]" if label else ""))
@@ -130,8 +134,9 @@ def run_step(cmd: list[str], timeout: int = 7200, label: str = "") -> int:
         rc = _active_proc.returncode
     except subprocess.TimeoutExpired:
         log(f"TIMEOUT after {timeout}s — killing")
-        _active_proc.kill()
-        _active_proc.wait()
+        if _active_proc is not None:
+            _active_proc.kill()
+            _active_proc.wait()
         rc = 1
     finally:
         _active_proc = None
@@ -140,6 +145,7 @@ def run_step(cmd: list[str], timeout: int = 7200, label: str = "") -> int:
 
 
 # ── Phase 1: Wait for arXiv download ─────────────────────────────────────────
+
 
 def arxiv_is_done() -> bool:
     """Check all-history.log for completion marker."""
@@ -165,12 +171,12 @@ def phase1_wait(progress: dict) -> bool:
 
 # ── Phase 2: OpenAlex fetch ───────────────────────────────────────────────────
 
+
 def phase2_openalex(progress: dict) -> bool:
     if progress["openalex_done"]:
         return True
 
     # Temporarily enable OpenAlex in config
-    cfg = load_config()
     cfg_path = ROOT / "config.yaml"
     raw = cfg_path.read_text(encoding="utf-8")
     if "enabled: false          # integrated into --all-history windowed fetch" in raw:
@@ -186,7 +192,7 @@ def phase2_openalex(progress: dict) -> bool:
         log("OpenAlex already enabled or config format changed — proceeding")
 
     before = paper_count()
-    rc = run_step(
+    run_step(
         [sys.executable, str(ROOT / "run.py"), "--all-history", "--abstract-only"],
         timeout=7200,
         label="OpenAlex all-history",
@@ -211,6 +217,7 @@ def phase2_openalex(progress: dict) -> bool:
 
 # ── Phase 3: Semantic Scholar ─────────────────────────────────────────────────
 
+
 def phase3_semantic_scholar(progress: dict) -> bool:
     if progress["ss_done"]:
         return True
@@ -231,7 +238,7 @@ def phase3_semantic_scholar(progress: dict) -> bool:
         log("Semantic Scholar already enabled or config format changed")
 
     before = paper_count()
-    rc = run_step(
+    run_step(
         [sys.executable, str(ROOT / "fetch.py"), "--fetch-ss"],
         timeout=7200,
         label="Semantic Scholar bulk import",
@@ -256,6 +263,7 @@ def phase3_semantic_scholar(progress: dict) -> bool:
 
 # ── Phase 4: Sync ChromaDB ────────────────────────────────────────────────────
 
+
 def phase4_sync(progress: dict, label: str = "") -> None:
     rc = run_step(
         [sys.executable, str(ROOT / "sync.py")],
@@ -268,6 +276,7 @@ def phase4_sync(progress: dict, label: str = "") -> None:
 
 
 # ── Phase 5: Distillation ─────────────────────────────────────────────────────
+
 
 def run_distillation(progress: dict, label: str = "") -> bool:
     """Run full 12-topic distillation. Returns True on success."""
@@ -313,6 +322,7 @@ def should_distill(progress: dict) -> bool:
 
 # ── Phase 7: Verification ─────────────────────────────────────────────────────
 
+
 def verify_distillation() -> dict:
     """Check the quality of the most recent distillation output."""
     cfg = load_config()
@@ -324,15 +334,27 @@ def verify_distillation() -> dict:
     content = out_file.read_text(encoding="utf-8")
     word_count = len(content.split())
     section_count = content.count("\n## ")
-    arxiv_refs = len([l for l in content.split("\n") if "[" in l and "]" in l and "." in l])
+    arxiv_refs = len(
+        [
+            line
+            for line in content.split("\n")
+            if "[" in line and "]" in line and "." in line
+        ]
+    )
 
     required_topics = [
-        "momentum", "mean reversion", "volatility", "factor", "crypto",
-        "backtesting", "overfitting", "microstructure",
+        "momentum",
+        "mean reversion",
+        "volatility",
+        "factor",
+        "crypto",
+        "backtesting",
+        "overfitting",
+        "microstructure",
     ]
     covered = sum(1 for t in required_topics if t.lower() in content.lower())
 
-    ok = (word_count >= 3000 and section_count >= 8 and covered >= 6)
+    ok = word_count >= 3000 and section_count >= 8 and covered >= 6
     return {
         "ok": ok,
         "word_count": word_count,
@@ -343,6 +365,7 @@ def verify_distillation() -> dict:
 
 
 # ── Status display ────────────────────────────────────────────────────────────
+
 
 def print_status(progress: dict) -> None:
     n = paper_count()
@@ -356,19 +379,27 @@ def print_status(progress: dict) -> None:
     print(f"  Distillations    : {len(progress['distillations'])} runs")
     if progress["distillations"]:
         last = progress["distillations"][-1]
-        print(f"  Last distill     : {last['timestamp'][:10]} ({last['paper_count']:,} papers)")
+        print(
+            f"  Last distill     : {last['timestamp'][:10]} ({last['paper_count']:,} papers)"
+        )
     vr = verify_distillation()
-    print(f"  Distill quality  : {'OK' if vr.get('ok') else 'NEEDS WORK'} — "
-          f"{vr.get('word_count', 0):,} words, {vr.get('topics_covered', '?')} topics")
-    print(f"\n  Full analysis    : use Claude Code + ANALYSIS_SKILL.md")
+    print(
+        f"  Distill quality  : {'OK' if vr.get('ok') else 'NEEDS WORK'} — "
+        f"{vr.get('word_count', 0):,} words, {vr.get('topics_covered', '?')} topics"
+    )
+    print("\n  Full analysis    : use Claude Code + ANALYSIS_SKILL.md")
     print("=" * 60)
 
 
 # ── Signal handler ────────────────────────────────────────────────────────────
 
+
 def _install_sigint() -> None:
-    def _handler(sig, frame):  # noqa: ANN001
-        print("\n[master.py] Ctrl+C — stopping. Progress saved. Re-run to continue.", flush=True)
+    def _handler(sig, frame):
+        print(
+            "\n[master.py] Ctrl+C — stopping. Progress saved. Re-run to continue.",
+            flush=True,
+        )
         if _active_proc and _active_proc.poll() is None:
             _active_proc.terminate()
             try:
@@ -376,17 +407,23 @@ def _install_sigint() -> None:
             except subprocess.TimeoutExpired:
                 _active_proc.kill()
         sys.exit(0)
+
     signal.signal(signal.SIGINT, _handler)
 
 
 # ── Main orchestration loop ───────────────────────────────────────────────────
 
+
 def main() -> None:
     _install_sigint()
 
-    parser = argparse.ArgumentParser(description="Quant Brain autonomous build orchestration")
+    parser = argparse.ArgumentParser(
+        description="Quant Brain autonomous build orchestration"
+    )
     parser.add_argument("--status", action="store_true", help="Show status and exit")
-    parser.add_argument("--distill-now", action="store_true", help="Run distillation immediately")
+    parser.add_argument(
+        "--distill-now", action="store_true", help="Run distillation immediately"
+    )
     args = parser.parse_args()
 
     progress = load_progress()
@@ -456,7 +493,9 @@ def main() -> None:
         if vr.get("ok"):
             progress["verified"] = True
             save_progress(progress)
-            log("COMPLETE — papers downloaded and distilled. Use ANALYSIS_SKILL.md for full analysis.")
+            log(
+                "COMPLETE — papers downloaded and distilled. Use ANALYSIS_SKILL.md for full analysis."
+            )
             print_status(progress)
         else:
             log(f"Quality check FAILED: {vr}. Re-running distillation...")
@@ -467,7 +506,9 @@ def main() -> None:
                 save_progress(progress)
                 log("COMPLETE after retry — quant brain ready.")
             else:
-                log("Distillation quality still thin. Add more papers or run --distill-now manually.")
+                log(
+                    "Distillation quality still thin. Add more papers or run --distill-now manually."
+                )
         break
 
     log("master.py done.")

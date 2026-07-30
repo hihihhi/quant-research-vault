@@ -32,12 +32,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 import pdfplumber
 import requests
 import yaml
-
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,7 @@ Novelty: X/5 | Feasibility: X/5 | Crypto: X/5 | HK Equity: X/5
 
 # ── Config & DB ───────────────────────────────────────────────────────────────
 
+
 def load_config(path: str = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -111,52 +113,70 @@ def get_db(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def get_pending(conn: sqlite3.Connection, limit: int | None = None,
-                arxiv_id: str | None = None, upgrade: bool = False) -> list[dict]:
+def get_pending(
+    conn: sqlite3.Connection,
+    limit: int | None = None,
+    arxiv_id: str | None = None,
+    upgrade: bool = False,
+) -> list[dict]:
     if arxiv_id:
         rows = conn.execute(
             "SELECT arxiv_id,title,authors,abstract,categories,published,pdf_url "
-            "FROM papers WHERE arxiv_id=?", (arxiv_id,)
+            "FROM papers WHERE arxiv_id=?",
+            (arxiv_id,),
         ).fetchall()
     elif upgrade:
         # Re-process entries written in abstract-only mode
-        q = ("SELECT arxiv_id,title,authors,abstract,categories,published,pdf_url "
-             "FROM papers WHERE processed=1 AND vault_path IS NOT NULL "
-             "ORDER BY published DESC")
+        q = (
+            "SELECT arxiv_id,title,authors,abstract,categories,published,pdf_url "
+            "FROM papers WHERE processed=1 AND vault_path IS NOT NULL "
+            "ORDER BY published DESC"
+        )
         if limit:
             q += f" LIMIT {limit}"
         rows = conn.execute(q).fetchall()
     else:
-        q = ("SELECT arxiv_id,title,authors,abstract,categories,published,pdf_url "
-             "FROM papers WHERE processed=0 ORDER BY published DESC")
+        q = (
+            "SELECT arxiv_id,title,authors,abstract,categories,published,pdf_url "
+            "FROM papers WHERE processed=0 ORDER BY published DESC"
+        )
         if limit:
             q += f" LIMIT {limit}"
         rows = conn.execute(q).fetchall()
     return [
-        {"arxiv_id": r[0], "title": r[1], "authors": json.loads(r[2]),
-         "abstract": r[3], "categories": json.loads(r[4]),
-         "published": r[5], "pdf_url": r[6]}
+        {
+            "arxiv_id": r[0],
+            "title": r[1],
+            "authors": json.loads(r[2]),
+            "abstract": r[3],
+            "categories": json.loads(r[4]),
+            "published": r[5],
+            "pdf_url": r[6],
+        }
         for r in rows
     ]
 
 
 _db_lock = threading.Lock()
 
+
 def mark_processed(conn: sqlite3.Connection, arxiv_id: str, vault_path: str) -> None:
     with _db_lock:
         conn.execute(
             "UPDATE papers SET processed=1, vault_path=? WHERE arxiv_id=?",
-            (vault_path, arxiv_id)
+            (vault_path, arxiv_id),
         )
         conn.commit()
 
 
 # ── PDF extraction ────────────────────────────────────────────────────────────
 
+
 def download_pdf(pdf_url: str) -> bytes | None:
     try:
-        r = requests.get(pdf_url, timeout=30,
-                         headers={"User-Agent": "quant-research-vault/1.0"})
+        r = requests.get(
+            pdf_url, timeout=30, headers={"User-Agent": "quant-research-vault/1.0"}
+        )
         r.raise_for_status()
         return r.content
     except Exception as e:
@@ -178,18 +198,23 @@ def extract_text(pdf_bytes: bytes, max_chars: int) -> str:
 
 # ── Summarization ─────────────────────────────────────────────────────────────
 
+
 def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
-    source = pdf_text.strip() if pdf_text.strip() else (
-        f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
+    source = (
+        pdf_text.strip()
+        if pdf_text.strip()
+        else (f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}")
     )
     prompt = SUMMARY_PROMPT.format(text=source)
     model = cfg["claude_model"]
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
+
         client = anthropic.Anthropic()
         msg = client.messages.create(
-            model=model, max_tokens=2048,
+            model=model,
+            max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
         return msg.content[0].text
@@ -206,6 +231,7 @@ def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
 
 # ── Markdown builders ─────────────────────────────────────────────────────────
 
+
 def _header(paper: dict) -> str:
     authors = paper["authors"]
     categories = paper["categories"]
@@ -213,7 +239,7 @@ def _header(paper: dict) -> str:
     return (
         f"---\n"
         f"arxiv_id: {paper['arxiv_id']}\n"
-        f"title: \"{paper['title'].replace(chr(34), chr(39))}\"\n"
+        f'title: "{paper["title"].replace(chr(34), chr(39))}"\n'
         f"authors: {', '.join(authors)}\n"
         f"published: {published}\n"
         f"categories: {', '.join(categories)}\n"
@@ -229,10 +255,7 @@ def _header(paper: dict) -> str:
 
 
 def build_abstract_entry(paper: dict) -> str:
-    return (
-        _header(paper)
-        + f"## Abstract\n\n{paper['abstract'].strip()}\n"
-    )
+    return _header(paper) + f"## Abstract\n\n{paper['abstract'].strip()}\n"
 
 
 def build_full_entry(paper: dict, summary: str) -> str:
@@ -246,9 +269,12 @@ def build_full_entry(paper: dict, summary: str) -> str:
 
 # ── File path ─────────────────────────────────────────────────────────────────
 
+
 def vault_file_path(paper: dict, vault_path: str, research_dir: str) -> Path:
-    cat = next((c for c in paper["categories"] if c.startswith("q-fin")),
-               paper["categories"][0])
+    cat = next(
+        (c for c in paper["categories"] if c.startswith("q-fin")),
+        paper["categories"][0],
+    )
     date_prefix = paper["published"][:7]
     slug = paper["arxiv_id"].replace("/", "-").replace(".", "-")
     folder = Path(vault_path) / research_dir / cat
@@ -260,6 +286,7 @@ def vault_file_path(paper: dict, vault_path: str, research_dir: str) -> Path:
 
 _print_lock = threading.Lock()
 
+
 def _is_fully_analyzed(vault_path: str) -> bool:
     """Check if a vault file already has full Claude analysis (not just abstract)."""
     try:
@@ -269,13 +296,18 @@ def _is_fully_analyzed(vault_path: str) -> bool:
         return False
 
 
-def _process_one(paper: dict, cfg: dict, abstract_only: bool,
-                 conn: sqlite3.Connection, counter: list) -> bool:
+def _process_one(
+    paper: dict, cfg: dict, abstract_only: bool, conn: sqlite3.Connection, counter: list
+) -> bool:
     try:
         out_path = vault_file_path(paper, cfg["vault_path"], cfg["research_dir"])
 
         # Skip Phase 2 if already fully analyzed (safe to restart without re-processing)
-        if not abstract_only and out_path.exists() and _is_fully_analyzed(str(out_path)):
+        if (
+            not abstract_only
+            and out_path.exists()
+            and _is_fully_analyzed(str(out_path))
+        ):
             with _print_lock:
                 counter[0] += 1
             return True
@@ -298,7 +330,10 @@ def _process_one(paper: dict, cfg: dict, abstract_only: bool,
             counter[0] += 1
             n = counter[0]
             total = counter[1]
-            print(f"  [{n}/{total}] {paper['arxiv_id']}: {paper['title'][:60]}", flush=True)
+            print(
+                f"  [{n}/{total}] {paper['arxiv_id']}: {paper['title'][:60]}",
+                flush=True,
+            )
         return True
 
     except Exception as e:
@@ -309,15 +344,17 @@ def _process_one(paper: dict, cfg: dict, abstract_only: bool,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def _safe_worker_count(requested: int) -> int:
     """Calculate a safe API worker count for concurrent Anthropic API calls.
 
     Caps based on available RAM and CPU to avoid overwhelming the machine.
     """
     import psutil  # optional — only used here
+
     cpu = os.cpu_count() or 2
     try:
-        ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+        ram_gb = psutil.virtual_memory().available / (1024**3)
         # Each claude process needs ~300-500 MB
         ram_cap = max(1, int(ram_gb / 0.5))
     except Exception:
@@ -338,18 +375,29 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--arxiv-id")
-    parser.add_argument("--abstract-only", action="store_true",
-                        help="Phase 1: fast index (abstract only, no Claude)")
-    parser.add_argument("--upgrade", action="store_true",
-                        help="Re-enrich already-processed papers with full Claude analysis")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Parallel Claude workers (default: auto-detect from RAM/CPU)")
+    parser.add_argument(
+        "--abstract-only",
+        action="store_true",
+        help="Phase 1: fast index (abstract only, no Claude)",
+    )
+    parser.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="Re-enrich already-processed papers with full Claude analysis",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Parallel Claude workers (default: auto-detect from RAM/CPU)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     conn = get_db(cfg["db_path"])
-    papers = get_pending(conn, limit=args.limit, arxiv_id=args.arxiv_id,
-                         upgrade=args.upgrade)
+    papers = get_pending(
+        conn, limit=args.limit, arxiv_id=args.arxiv_id, upgrade=args.upgrade
+    )
 
     if not papers:
         print("No papers pending processing.")
@@ -366,8 +414,11 @@ def main() -> None:
         except ImportError:
             # psutil not installed — fall back to conservative default
             workers = min(requested, 2)
-            print(f"[workers] psutil not found; defaulting to {workers} workers. "
-                  f"Install psutil for auto-detection.", flush=True)
+            print(
+                f"[workers] psutil not found; defaulting to {workers} workers. "
+                f"Install psutil for auto-detection.",
+                flush=True,
+            )
 
     mode = "abstract-only" if abstract_only else f"full PDF+Claude ({workers} workers)"
     print(f"Processing {len(papers)} papers [{mode}]...", flush=True)
