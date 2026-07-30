@@ -17,7 +17,9 @@ import sys
 from pathlib import Path
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 import chromadb
 import yaml
@@ -86,18 +88,22 @@ def index_paper(collection: chromadb.Collection, paper: dict) -> bool:
     collection.upsert(
         ids=[paper["arxiv_id"]],
         documents=[content],
-        metadatas=[{
-            "arxiv_id": paper["arxiv_id"],
-            "title": paper["title"],
-            "categories": ", ".join(paper["categories"]),
-            "published": paper["published"],
-            "vault_path": str(vault_path),
-        }],
+        metadatas=[
+            {
+                "arxiv_id": paper["arxiv_id"],
+                "title": paper["title"],
+                "categories": ", ".join(paper["categories"]),
+                "published": paper["published"],
+                "vault_path": str(vault_path),
+            }
+        ],
     )
     return True
 
 
-def index_guidelines(collection: chromadb.Collection, vault_path: str, rebuild: bool) -> int:
+def index_guidelines(
+    collection: chromadb.Collection, vault_path: str, rebuild: bool
+) -> int:
     """Index all .md files in vault_path/guidelines/ directory."""
     guidelines_dir = Path(vault_path) / "guidelines"
     if not guidelines_dir.exists():
@@ -112,13 +118,15 @@ def index_guidelines(collection: chromadb.Collection, vault_path: str, rebuild: 
         collection.upsert(
             ids=[doc_id],
             documents=[content],
-            metadatas=[{
-                "arxiv_id": doc_id,
-                "title": md_file.stem.replace("-", " ").title(),
-                "categories": "guidelines",
-                "published": "2026-01-01",
-                "vault_path": str(md_file),
-            }],
+            metadatas=[
+                {
+                    "arxiv_id": doc_id,
+                    "title": md_file.stem.replace("-", " ").title(),
+                    "categories": "guidelines",
+                    "published": "2026-01-01",
+                    "vault_path": str(md_file),
+                }
+            ],
         )
         print(f"  + guideline: {md_file.name}")
         indexed += 1
@@ -138,8 +146,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sync vault papers into ChromaDB")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--rebuild", action="store_true", help="Wipe and rebuild index")
-    parser.add_argument("--update-analyzed", action="store_true",
-                        help="Re-upsert papers that now have full analysis content")
+    parser.add_argument(
+        "--update-analyzed",
+        action="store_true",
+        help="Re-upsert papers that now have full analysis content",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -151,14 +162,20 @@ def main() -> None:
         return
 
     existing_count = collection.count()
-    print(f"Found {len(papers)} processed papers. Index currently has {existing_count} entries.")
+    print(
+        f"Found {len(papers)} processed papers. Index currently has {existing_count} entries."
+    )
 
     indexed = 0
     skipped = 0
     for paper in papers:
         if not args.rebuild and already_indexed(collection, paper["arxiv_id"]):
             # Re-upsert if the vault file now has full analysis (not just abstract)
-            if args.update_analyzed and paper.get("vault_path") and is_fully_analyzed(paper["vault_path"]):
+            if (
+                args.update_analyzed
+                and paper.get("vault_path")
+                and is_fully_analyzed(paper["vault_path"])
+            ):
                 pass  # fall through to index_paper below
             else:
                 skipped += 1
@@ -170,7 +187,9 @@ def main() -> None:
     g_indexed = index_guidelines(collection, cfg["vault_path"], args.rebuild)
     indexed += g_indexed
 
-    print(f"\nDone. Indexed {indexed} new papers/guidelines. Skipped {skipped} already indexed.")
+    print(
+        f"\nDone. Indexed {indexed} new papers/guidelines. Skipped {skipped} already indexed."
+    )
     print(f"Total papers in index: {collection.count()}")
 
 

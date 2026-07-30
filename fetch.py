@@ -14,7 +14,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone, timedelta, date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import arxiv
@@ -23,10 +23,13 @@ import yaml
 
 # Windows terminals may use cp950/cp1252 — force UTF-8 output
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path, encoding="utf-8") as f:
@@ -36,6 +39,7 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
+
 
 def init_db(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -59,25 +63,30 @@ def init_db(db_path: str) -> sqlite3.Connection:
 
 
 def already_fetched(conn: sqlite3.Connection, arxiv_id: str) -> bool:
-    row = conn.execute("SELECT 1 FROM papers WHERE arxiv_id = ?", (arxiv_id,)).fetchone()
+    row = conn.execute(
+        "SELECT 1 FROM papers WHERE arxiv_id = ?", (arxiv_id,)
+    ).fetchone()
     return row is not None
 
 
 def save_paper(conn: sqlite3.Connection, paper: dict) -> None:
-    conn.execute("""
+    conn.execute(
+        """
         INSERT OR IGNORE INTO papers
             (arxiv_id, title, authors, abstract, categories, published, pdf_url, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        paper["arxiv_id"],
-        paper["title"],
-        json.dumps(paper["authors"]),
-        paper["abstract"],
-        json.dumps(paper["categories"]),
-        paper["published"],
-        paper["pdf_url"],
-        datetime.now(timezone.utc).isoformat(),
-    ))
+    """,
+        (
+            paper["arxiv_id"],
+            paper["title"],
+            json.dumps(paper["authors"]),
+            paper["abstract"],
+            json.dumps(paper["categories"]),
+            paper["published"],
+            paper["pdf_url"],
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
     conn.commit()
 
 
@@ -107,7 +116,10 @@ def count_total(conn: sqlite3.Connection) -> int:
 
 # ── Date window generation ────────────────────────────────────────────────────
 
-def date_windows(start: date, end: date, chunk_months: int = 3) -> list[tuple[date, date]]:
+
+def date_windows(
+    start: date, end: date, chunk_months: int = 3
+) -> list[tuple[date, date]]:
     """Split [start, end] into chunks of ~chunk_months months."""
     windows = []
     cur = start
@@ -116,8 +128,7 @@ def date_windows(start: date, end: date, chunk_months: int = 3) -> list[tuple[da
         year = cur.year + month // 12
         month = month % 12 + 1
         nxt = date(year, month, 1)
-        if nxt > end:
-            nxt = end
+        nxt = min(nxt, end)
         windows.append((cur, nxt))
         cur = nxt
     return windows
@@ -125,7 +136,12 @@ def date_windows(start: date, end: date, chunk_months: int = 3) -> list[tuple[da
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
-def build_query(categories: list[str], window_start: date | None = None, window_end: date | None = None) -> str:
+
+def build_query(
+    categories: list[str],
+    window_start: date | None = None,
+    window_end: date | None = None,
+) -> str:
     cat_part = " OR ".join(f"cat:{c}" for c in categories)
     if window_start and window_end:
         d_start = window_start.strftime("%Y%m%d")
@@ -151,20 +167,29 @@ def _to_dict(r: arxiv.Result) -> dict:
     }
 
 
-def _iter_with_retry(client: arxiv.Client, search: arxiv.Search, max_retries: int = 4) -> list[arxiv.Result]:
+def _iter_with_retry(
+    client: arxiv.Client, search: arxiv.Search, max_retries: int = 4
+) -> list[arxiv.Result]:
     """Iterate results with retry + backoff on HTTP 429/500."""
     import time
+
     for attempt in range(max_retries):
         try:
             return list(client.results(search))
         except arxiv.HTTPError as e:
             if e.status == 429:
-                wait = 60 * (2 ** attempt)  # 60s, 120s, 240s, 480s
-                print(f"  Rate limited (429). Waiting {wait}s before retry {attempt+1}/{max_retries}...", flush=True)
+                wait = 60 * (2**attempt)  # 60s, 120s, 240s, 480s
+                print(
+                    f"  Rate limited (429). Waiting {wait}s before retry {attempt + 1}/{max_retries}...",
+                    flush=True,
+                )
                 time.sleep(wait)
             elif e.status == 500:
                 wait = 30 * (attempt + 1)
-                print(f"  Server error (500). Waiting {wait}s before retry {attempt+1}/{max_retries}...", flush=True)
+                print(
+                    f"  Server error (500). Waiting {wait}s before retry {attempt + 1}/{max_retries}...",
+                    flush=True,
+                )
                 time.sleep(wait)
             else:
                 raise
@@ -218,9 +243,19 @@ def fetch_openalex_window(cfg: dict, window_start=None, window_end=None) -> list
         filters.append(f"to_publication_date:{window_end.isoformat()}")
 
     # Finance + quant keywords search
-    search_terms = " ".join(cfg.get("ml_keywords", [
-        "portfolio", "trading", "volatility", "momentum", "alpha", "cryptocurrency",
-    ])[:12])
+    search_terms = " ".join(
+        cfg.get(
+            "ml_keywords",
+            [
+                "portfolio",
+                "trading",
+                "volatility",
+                "momentum",
+                "alpha",
+                "cryptocurrency",
+            ],
+        )[:12]
+    )
 
     params = {
         "search": search_terms,
@@ -234,7 +269,7 @@ def fetch_openalex_window(cfg: dict, window_start=None, window_end=None) -> list
         params["mailto"] = mailto
 
     ua = "quant-research-vault/1.0 (mailto:{}) OpenAlex".format(mailto or "anonymous")
-    results = []
+    results: list[dict] = []
     seen_ids: set[str] = set()
 
     while len(results) < max_results:
@@ -296,15 +331,17 @@ def fetch_openalex_window(cfg: dict, window_start=None, window_end=None) -> list
 
             pub_date = (work.get("publication_date") or "2000-01-01")[:10]
 
-            results.append({
-                "arxiv_id": paper_id,
-                "title": title,
-                "authors": authors,
-                "abstract": abstract,
-                "categories": categories,
-                "published": pub_date + "T00:00:00+00:00",
-                "pdf_url": pdf_url,
-            })
+            results.append(
+                {
+                    "arxiv_id": paper_id,
+                    "title": title,
+                    "authors": authors,
+                    "abstract": abstract,
+                    "categories": categories,
+                    "published": pub_date + "T00:00:00+00:00",
+                    "pdf_url": pdf_url,
+                }
+            )
 
             if len(results) >= max_results:
                 break
@@ -324,7 +361,9 @@ def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
     """
     ss_cfg = (cfg.get("extra_sources") or {}).get("semantic_scholar", {})
     if not ss_cfg.get("enabled", False):
-        print("[semantic_scholar] disabled in config (set extra_sources.semantic_scholar.enabled: true)")
+        print(
+            "[semantic_scholar] disabled in config (set extra_sources.semantic_scholar.enabled: true)"
+        )
         return []
 
     import time as _time
@@ -340,18 +379,26 @@ def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
 
     fields = "paperId,title,abstract,authors,year,publicationDate,externalIds,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy"
 
-    results = []
+    results: list[dict] = []
     seen_ids: set[str] = set()
     offset = 0
     limit = 100
 
-    print(f"[semantic_scholar] Fetching up to {max_results} finance papers (non-arXiv only)...", flush=True)
+    print(
+        f"[semantic_scholar] Fetching up to {max_results} finance papers (non-arXiv only)...",
+        flush=True,
+    )
 
     while len(results) < max_results:
         try:
             r = requests.get(
                 "https://api.semanticscholar.org/graph/v1/paper/search",
-                params={"query": query, "fields": fields, "limit": limit, "offset": offset},
+                params={
+                    "query": query,
+                    "fields": fields,
+                    "limit": limit,
+                    "offset": offset,
+                },
                 headers=headers,
                 timeout=30,
             )
@@ -402,18 +449,22 @@ def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
             if len(pub_date) == 4:
                 pub_date += "-01-01"
 
-            results.append({
-                "arxiv_id": paper_id,
-                "title": title,
-                "authors": authors,
-                "abstract": abstract,
-                "categories": ["q-fin.GN"],
-                "published": pub_date[:10] + "T00:00:00+00:00",
-                "pdf_url": pdf_url,
-            })
+            results.append(
+                {
+                    "arxiv_id": paper_id,
+                    "title": title,
+                    "authors": authors,
+                    "abstract": abstract,
+                    "categories": ["q-fin.GN"],
+                    "published": pub_date[:10] + "T00:00:00+00:00",
+                    "pdf_url": pdf_url,
+                }
+            )
 
             if len(results) % 500 == 0:
-                print(f"  [semantic_scholar] {len(results)} papers so far...", flush=True)
+                print(
+                    f"  [semantic_scholar] {len(results)} papers so far...", flush=True
+                )
 
             if len(results) >= max_results:
                 break
@@ -424,22 +475,28 @@ def fetch_semantic_scholar_bulk(cfg: dict) -> list[dict]:
             break
         _time.sleep(sleep_secs)
 
-    print(f"  [semantic_scholar] Done: {len(results)} non-arXiv papers found.", flush=True)
+    print(
+        f"  [semantic_scholar] Done: {len(results)} non-arXiv papers found.", flush=True
+    )
     return results
 
 
 def _active_profiles(cfg: dict) -> list[tuple[str, dict]]:
     """Return list of (name, profile) for all enabled profiles."""
     return [
-        (name, p) for name, p in cfg.get("profiles", {}).items()
-        if p.get("enabled")
+        (name, p) for name, p in cfg.get("profiles", {}).items() if p.get("enabled")
     ]
 
 
-def fetch_window(cfg: dict, window_start: date | None = None, window_end: date | None = None,
-                 max_per_query: int = 2000) -> list[dict]:
+def fetch_window(
+    cfg: dict,
+    window_start: date | None = None,
+    window_end: date | None = None,
+    max_per_query: int = 2000,
+) -> list[dict]:
     """Fetch papers in a specific date window (or all if no window given)."""
     import time as _time_mod
+
     client = arxiv.Client(page_size=100, delay_seconds=5, num_retries=3)
     results: list[dict] = []
     seen: set[str] = set()
@@ -516,16 +573,26 @@ def fetch_recent(cfg: dict, days_override: int | None = None) -> list[dict]:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fetch quant finance papers from arXiv")
+    parser = argparse.ArgumentParser(
+        description="Fetch quant finance papers from arXiv"
+    )
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--days", type=int, help="Override days_lookback")
-    parser.add_argument("--all-history", action="store_true", help="Fetch ALL papers via date-range chunks")
+    parser.add_argument(
+        "--all-history",
+        action="store_true",
+        help="Fetch ALL papers via date-range chunks",
+    )
     parser.add_argument("--window-start", help="Specific window start YYYYMMDD")
     parser.add_argument("--window-end", help="Specific window end YYYYMMDD")
     parser.add_argument("--dry-run", action="store_true", help="Print without saving")
-    parser.add_argument("--fetch-ss", action="store_true",
-                        help="One-time bulk import from Semantic Scholar (non-arXiv papers)")
+    parser.add_argument(
+        "--fetch-ss",
+        action="store_true",
+        help="One-time bulk import from Semantic Scholar (non-arXiv papers)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -538,7 +605,9 @@ def main() -> int:
             if not already_fetched(conn, p["arxiv_id"]):
                 save_paper(conn, p)
                 new_count += 1
-        print(f"\nSemantic Scholar import: {new_count} new papers added. DB total: {count_total(conn)}")
+        print(
+            f"\nSemantic Scholar import: {new_count} new papers added. DB total: {count_total(conn)}"
+        )
         conn.close()
         return 0
 
@@ -550,7 +619,9 @@ def main() -> int:
         windows = date_windows(start_date, end_date, chunk_months=3)
         total_new = 0
 
-        print(f"All-history mode: {len(windows)} quarterly windows from {start_date} to {end_date}")
+        print(
+            f"All-history mode: {len(windows)} quarterly windows from {start_date} to {end_date}"
+        )
 
         for i, (w_start, w_end) in enumerate(windows, 1):
             print(f"\n[{i}/{len(windows)}] Window: {w_start} -> {w_end}", flush=True)
@@ -563,9 +634,14 @@ def main() -> int:
                     new_count += 1
             total_new += new_count
             total_db = count_total(conn)
-            print(f"  Window done: {len(papers)} found, {new_count} new. DB total: {total_db}", flush=True)
+            print(
+                f"  Window done: {len(papers)} found, {new_count} new. DB total: {total_db}",
+                flush=True,
+            )
 
-        print(f"\nAll-history fetch complete. Total new papers: {total_new}. DB total: {count_total(conn)}")
+        print(
+            f"\nAll-history fetch complete. Total new papers: {total_new}. DB total: {count_total(conn)}"
+        )
         conn.close()
         return 0
 
@@ -595,7 +671,9 @@ def main() -> int:
 
     if not args.dry_run:
         pending = get_unprocessed(conn)
-        print(f"\nSaved {new_count} new papers. {len(pending)} total pending processing.")
+        print(
+            f"\nSaved {new_count} new papers. {len(pending)} total pending processing."
+        )
 
     conn.close()
     return 0

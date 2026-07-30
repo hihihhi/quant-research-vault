@@ -13,7 +13,7 @@ Usage:
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import chromadb
@@ -21,7 +21,9 @@ import yaml
 
 # ── UTF-8 stdout fix ──────────────────────────────────────────────────────────
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).parent.parent
 CONFIG_PATH = ROOT / "config.yaml"
@@ -87,14 +89,17 @@ def get_papers_by_category(
     result: dict[str, list[dict]] = {}
 
     for cat in categories:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT p.arxiv_id, p.title, p.abstract, p.published, p.vault_path
             FROM papers p
             WHERE p.processed = 1
               AND p.categories LIKE ?
             ORDER BY p.published DESC
             LIMIT 5
-        """, (f'%"{cat}"%',)).fetchall()
+        """,
+            (f'%"{cat}"%',),
+        ).fetchall()
 
         papers = []
         for r in rows:
@@ -109,12 +114,14 @@ def get_papers_by_category(
                         idx = content.index("## Abstract") + len("## Abstract")
                         abstract_section = content[idx:].split("##")[0].strip()
                         abstract = abstract_section[:400]
-            papers.append({
-                "arxiv_id": r[0],
-                "title": r[1],
-                "abstract": truncate(abstract, 200),
-                "published": (r[3] or "")[:7],
-            })
+            papers.append(
+                {
+                    "arxiv_id": r[0],
+                    "title": r[1],
+                    "abstract": truncate(abstract, 200),
+                    "published": (r[3] or "")[:7],
+                }
+            )
         if papers:
             result[cat] = papers
 
@@ -123,13 +130,16 @@ def get_papers_by_category(
 
 def get_recent_papers(conn: sqlite3.Connection, days: int = 30) -> list[dict]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT arxiv_id, title, categories, published, abstract
         FROM papers
         WHERE fetched_at > ?
         ORDER BY published DESC
         LIMIT 20
-    """, (cutoff,)).fetchall()
+    """,
+        (cutoff,),
+    ).fetchall()
 
     result = []
     for r in rows:
@@ -137,13 +147,15 @@ def get_recent_papers(conn: sqlite3.Connection, days: int = 30) -> list[dict]:
             cats = ", ".join(json.loads(r[2]))
         except Exception:
             cats = r[2] or ""
-        result.append({
-            "arxiv_id": r[0],
-            "title": r[1],
-            "categories": cats,
-            "published": (r[3] or "")[:7],
-            "abstract": truncate(r[4] or "", 150),
-        })
+        result.append(
+            {
+                "arxiv_id": r[0],
+                "title": r[1],
+                "categories": cats,
+                "published": (r[3] or "")[:7],
+                "abstract": truncate(r[4] or "", 150),
+            }
+        )
     return result
 
 
@@ -159,13 +171,15 @@ def get_top50_from_chroma(collection: chromadb.Collection) -> list[dict]:
     )
     papers = []
     for doc, meta in zip(result["documents"], result["metadatas"]):
-        papers.append({
-            "arxiv_id": meta.get("arxiv_id", ""),
-            "title": meta.get("title", ""),
-            "categories": meta.get("categories", ""),
-            "published": meta.get("published", ""),
-            "excerpt": doc[:300] if doc else "",
-        })
+        papers.append(
+            {
+                "arxiv_id": meta.get("arxiv_id", ""),
+                "title": meta.get("title", ""),
+                "categories": meta.get("categories", ""),
+                "published": meta.get("published", ""),
+                "excerpt": doc[:300] if doc else "",
+            }
+        )
     return papers
 
 
@@ -259,7 +273,9 @@ def write_output(content: str) -> None:
     print(f"Written: {primary}")
 
     # Secondary: copilot-setup repo (if it exists)
-    secondary = Path("C:/Users/heiwa/Desktop/copilot-setup/.github/memory/quant-brain.md")
+    secondary = Path(
+        "C:/Users/heiwa/Desktop/copilot-setup/.github/memory/quant-brain.md"
+    )
     if secondary.parent.parent.parent.exists():
         secondary.parent.mkdir(parents=True, exist_ok=True)
         secondary.write_text(content, encoding="utf-8")
@@ -275,8 +291,10 @@ def main() -> None:
     conn = get_db(cfg)
 
     stats = get_all_stats(conn, collection)
-    print(f"  Total papers: {stats['total']:,} | Processed: {stats['processed']:,} | "
-          f"Index: {stats['index_size']:,}")
+    print(
+        f"  Total papers: {stats['total']:,} | Processed: {stats['processed']:,} | "
+        f"Index: {stats['index_size']:,}"
+    )
 
     papers_by_cat = get_papers_by_category(conn, cfg)
     recent = get_recent_papers(conn, days=30)

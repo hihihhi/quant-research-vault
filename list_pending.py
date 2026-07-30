@@ -33,7 +33,9 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int, help="Max papers to list")
     parser.add_argument("--count-only", action="store_true", help="Print count only")
-    parser.add_argument("--domain", help="Filter by category prefix (e.g. q-fin, cs, stat)")
+    parser.add_argument(
+        "--domain", help="Filter by category prefix (e.g. q-fin, cs, stat)"
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -58,14 +60,16 @@ def main() -> None:
         try:
             content = Path(vp).read_text(encoding="utf-8", errors="replace")
             if "## Signal" not in content and "## Construction" not in content:
-                pending.append({
-                    "arxiv_id": r[0],
-                    "title": r[1],
-                    "categories": cats,
-                    "published": r[5][:10] if r[5] else "",
-                    "pdf_url": r[6],
-                    "vault_path": vp,
-                })
+                pending.append(
+                    {
+                        "arxiv_id": r[0],
+                        "title": r[1],
+                        "categories": cats,
+                        "published": r[5][:10] if r[5] else "",
+                        "pdf_url": r[6],
+                        "vault_path": vp,
+                    }
+                )
         except Exception:
             pass
 
@@ -76,7 +80,9 @@ def main() -> None:
         print(len(pending))
         return
 
-    sys.stdout.buffer.write(json.dumps(pending, indent=2, ensure_ascii=False).encode("utf-8") + b"\n")
+    sys.stdout.buffer.write(
+        json.dumps(pending, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    )
     print(f"# {len(pending)} papers pending full analysis", file=sys.stderr)
 
 

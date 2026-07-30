@@ -31,10 +31,9 @@ from pathlib import Path
 
 import chromadb
 import yaml
+from mcp import types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-import mcp.types as types
-
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
@@ -47,6 +46,7 @@ def _is_pid_alive(pid: int) -> bool:
     """Cross-platform liveness check. Uses psutil when available."""
     try:
         import psutil
+
         return psutil.pid_exists(pid)
     except ImportError:
         pass
@@ -117,7 +117,10 @@ def get_db(cfg: dict) -> sqlite3.Connection:
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
-def search_papers(collection: chromadb.Collection, query: str, n_results: int = 5) -> list[dict]:
+
+def search_papers(
+    collection: chromadb.Collection, query: str, n_results: int = 5
+) -> list[dict]:
     try:
         results = collection.query(
             query_texts=[query],
@@ -133,27 +136,32 @@ def search_papers(collection: chromadb.Collection, query: str, n_results: int = 
         results["metadatas"][0],
         results["distances"][0],
     ):
-        papers.append({
-            "arxiv_id": meta.get("arxiv_id"),
-            "title": meta.get("title"),
-            "categories": meta.get("categories"),
-            "published": meta.get("published"),
-            "relevance_score": round(1 - dist, 3),
-            "vault_path": meta.get("vault_path"),
-            "summary_excerpt": doc[:500] + "..." if len(doc) > 500 else doc,
-        })
+        papers.append(
+            {
+                "arxiv_id": meta.get("arxiv_id"),
+                "title": meta.get("title"),
+                "categories": meta.get("categories"),
+                "published": meta.get("published"),
+                "relevance_score": round(1 - dist, 3),
+                "vault_path": meta.get("vault_path"),
+                "summary_excerpt": doc[:500] + "..." if len(doc) > 500 else doc,
+            }
+        )
     return papers
 
 
 def list_recent_papers(conn: sqlite3.Connection, days: int = 7) -> list[dict]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    rows = conn.execute("""
+    rows = conn.execute(
+        """
         SELECT arxiv_id, title, categories, published, vault_path
         FROM papers
         WHERE processed = 1 AND fetched_at > ?
         ORDER BY published DESC
         LIMIT 20
-    """, (cutoff,)).fetchall()
+    """,
+        (cutoff,),
+    ).fetchall()
     return [
         {
             "arxiv_id": r[0],
@@ -170,7 +178,7 @@ def get_paper_summary(cfg: dict, arxiv_id: str) -> str | None:
     conn = get_db(cfg)
     row = conn.execute(
         "SELECT vault_path FROM papers WHERE arxiv_id = ? AND processed = 1",
-        (arxiv_id,)
+        (arxiv_id,),
     ).fetchone()
     conn.close()
     if not row or not row[0]:
@@ -254,6 +262,7 @@ def get_vault_stats_text(cfg: dict, collection: chromadb.Collection) -> str:
 
 
 # ── MCP server ────────────────────────────────────────────────────────────────
+
 
 def build_server() -> Server:
     cfg = load_config()
@@ -380,13 +389,19 @@ def build_server() -> Server:
             else:
                 lines = [f"{len(papers)} papers added in the last {days} days:\n"]
                 for p in papers:
-                    lines.append(f"- **{p['title']}** ({p['arxiv_id']}) — {p['published']}")
+                    lines.append(
+                        f"- **{p['title']}** ({p['arxiv_id']}) — {p['published']}"
+                    )
                 text = "\n".join(lines)
 
         elif name == "get_paper":
             arxiv_id = arguments["arxiv_id"]
             summary = get_paper_summary(cfg, arxiv_id)
-            text = summary if summary else f"Paper {arxiv_id} not found or not yet processed."
+            text = (
+                summary
+                if summary
+                else f"Paper {arxiv_id} not found or not yet processed."
+            )
 
         elif name == "generate_alpha_ideas":
             topic = arguments["topic"]
@@ -408,12 +423,15 @@ async def run_server() -> None:
     server = build_server()
     try:
         async with stdio_server() as (read_stream, write_stream):
-            await server.run(read_stream, write_stream, server.create_initialization_options())
+            await server.run(
+                read_stream, write_stream, server.create_initialization_options()
+            )
     finally:
         _release_lock()
 
 
 # ── CLI test mode ─────────────────────────────────────────────────────────────
+
 
 def test_search(query: str) -> None:
     cfg = load_config()
