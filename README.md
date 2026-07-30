@@ -1,10 +1,10 @@
 # Quant Research Vault
 
-A local Python pipeline that retrieves configured academic-paper metadata, stores it in SQLite, indexes processed records in ChromaDB, and exposes read-only retrieval through an MCP server.
+A local Python pipeline recorded 18,492 audit-time SQLite rows (sample status UNKNOWN), indexes processed academic-paper records in ChromaDB, and exposes read-only retrieval through an MCP server.
 
 ## Status & honesty
 
-Active research-infrastructure project. No trading, predictive, or benchmark performance result is retained in this public checkout. In-sample result: UNKNOWN. Out-of-sample result: UNKNOWN. The exact scale of **18,492 papers** is UNKNOWN: no committed database, retained query output, or reproducible public corpus in this repository confirms it. Generated databases, vector indexes, PDFs, exports, and optional model outputs are local-only and intentionally ignored.
+Active research-infrastructure project. An audit-time query returned **18,492 rows** from the local `papers` SQLite table; this is an operational row count, not a quality or model-performance result, and its sample status is UNKNOWN. The database is intentionally unpublished, so `docs/corpus_audit_snapshot_2026-07-30.json` records the exact queries, results, database size, and SHA-256 while marking the count non-reproducible from a public clone. No trading, predictive, retrieval-quality, or benchmark result is claimed.
 
 ## Architecture
 
@@ -35,6 +35,7 @@ The project decouples abstract-only indexing from optional full-text/model-assis
 - arXiv and OpenAlex are the configured upstream metadata sources (`config.yaml`, `fetch.py`); their availability, coverage, licenses, and API limits remain upstream concerns.
 - SQLite is the local state store and ChromaDB is the local vector index (`fetch.py`, `sync.py`, `search_mcp.py`).
 - The MCP server is local and read-only with respect to the retrieval interface (`search_mcp.py`).
+- `docs/corpus_audit_snapshot_2026-07-30.json` records `SELECT count(*) FROM papers = 18492` against an ignored 33,161,216-byte SQLite file with SHA-256 `acb1a76ee2bf575fa083c807be39b66b34c040a6b9697a297b1e0dc0a0e7ab13`; the underlying rows are not published.
 - Repository license: **UNKNOWN**. This checkout has no `LICENSE` file, and provenance/rights for every contribution and generated artifact were not established here.
 
 ## Run it
@@ -54,7 +55,7 @@ The dry run makes live upstream requests but is intended not to persist fetched 
 
 ## Limitations
 
-- No committed corpus, database, ChromaDB index, or result log permits independent verification of a paper count, coverage, retrieval quality, or any research performance claim.
+- The committed audit snapshot preserves a local row count and source hash, but the corpus, SQLite database, and ChromaDB index are not published; the count, coverage, and retrieval quality are therefore not independently reproducible from this checkout.
 - Upstream API schema, rate-limit, and availability changes can affect ingestion.
 - The PID lock is a local single-instance guard, not a distributed lock.
 - Optional enrichment depends on local files and model/tool configuration; it is not exercised by the clean-clone quality suite.
