@@ -1,8 +1,42 @@
+# Credentials and local environment
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Local runtime state and caches
 .db/
+.cache/
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 logs/
+
+# Locally retrieved or private research material
+data/raw/
+data/private/
+research/private/
+exports/private/
+artifacts/private/
+private/
+
+# Large generated binaries kept in dedicated local directories
+exports/generated/
+artifacts/generated/
+models/local/
+*.parquet
+*.feather
+*.sqlite
+*.db
+*.zip
+*.7z
+*.bin
