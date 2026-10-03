@@ -4,12 +4,13 @@ generate-copilot-context.py — Generate a Copilot-compatible brain summary from
 
 Writes to:
   - <vault_repo>/.github/memory/quant-brain.md
-  - %USERPROFILE%/Desktop/copilot-setup/.github/memory/quant-brain.md (if it exists)
+  - $COPILOT_SETUP_DIR/.github/memory/quant-brain.md (if that variable is set and the folder exists)
 
 Usage:
     python scripts/generate-copilot-context.py
 """
 
+import os
 import json
 import sqlite3
 import sys
@@ -273,10 +274,9 @@ def write_output(content: str) -> None:
     print(f"Written: {primary}")
 
     # Secondary: copilot-setup repo (if it exists)
-    secondary = Path(
-        "%USERPROFILE%/Desktop/copilot-setup/.github/memory/quant-brain.md"
-    )
-    if secondary.parent.parent.parent.exists():
+    setup_dir = os.environ.get("COPILOT_SETUP_DIR")
+    secondary = Path(setup_dir) / ".github" / "memory" / "quant-brain.md" if setup_dir else None
+    if secondary is not None and secondary.parent.parent.parent.exists():
         secondary.parent.mkdir(parents=True, exist_ok=True)
         secondary.write_text(content, encoding="utf-8")
         print(f"Written: {secondary}")
