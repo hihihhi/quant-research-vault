@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-test_repo.py — Self-test: verify the repo is working correctly end-to-end.
+doctor.py — installation self-check: is this machine set up (database, index, MCP registration)? Not a unit test; pytest runs test_quality.py.
 
 Checks every component without needing AI assistance.
 
 Usage:
-    python test_repo.py          # run all checks
-    python test_repo.py --fix    # attempt auto-fix of common issues
+    python doctor.py          # run all checks
+    python doctor.py --fix    # attempt auto-fix of common issues
 
 Exit code 0 = all OK, 1 = failures found.
 """

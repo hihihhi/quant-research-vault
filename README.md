@@ -1,5 +1,7 @@
 # Quant Research Vault
 
+[![quality](https://github.com/hihihhi/quant-research-vault/actions/workflows/quality.yml/badge.svg)](https://github.com/hihihhi/quant-research-vault/actions/workflows/quality.yml)
+
 A local Python pipeline recorded 18,492 audit-time SQLite rows (sample status UNKNOWN), indexes processed academic-paper records in ChromaDB, and exposes read-only retrieval through an MCP server.
 
 ## Status & honesty

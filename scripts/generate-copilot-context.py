@@ -275,7 +275,9 @@ def write_output(content: str) -> None:
 
     # Secondary: copilot-setup repo (if it exists)
     setup_dir = os.environ.get("COPILOT_SETUP_DIR")
-    secondary = Path(setup_dir) / ".github" / "memory" / "quant-brain.md" if setup_dir else None
+    secondary = (
+        Path(setup_dir) / ".github" / "memory" / "quant-brain.md" if setup_dir else None
+    )
     if secondary is not None and secondary.parent.parent.parent.exists():
         secondary.parent.mkdir(parents=True, exist_ok=True)
         secondary.write_text(content, encoding="utf-8")

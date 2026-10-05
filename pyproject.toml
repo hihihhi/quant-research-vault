@@ -12,6 +12,6 @@ follow_imports = "skip"
 check_untyped_defs = true
 files = [
   "fetch.py", "sync.py", "search_mcp.py", "process.py", "run.py", "research.py",
-  "master.py", "install.py", "list_pending.py", "mark_analyzed.py", "test_repo.py",
+  "master.py", "install.py", "list_pending.py", "mark_analyzed.py", "doctor.py",
   "scripts/generate-copilot-context.py", "test_quality.py",
 ]
