@@ -329,10 +329,9 @@ def build_server() -> Server:
             types.Tool(
                 name="generate_alpha_ideas",
                 description=(
-                    "Search the vault for relevant research papers and generate specific, "
-                    "implementable alpha trading ideas on a given topic using Claude AI. "
-                    "Returns 3 alpha ideas with signal construction, data requirements, "
-                    "holding period, and key risks."
+                    "Search the vault for research papers relevant to a topic and return their "
+                    "excerpts as context for drafting alpha ideas. This server calls no model; "
+                    "the calling assistant drafts the ideas."
                 ),
                 inputSchema={
                     "type": "object",
