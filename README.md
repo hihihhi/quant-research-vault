@@ -1,6 +1,6 @@
 # Quant Research Vault: Local Paper Ingestion and Semantic Search over MCP
 
-[![quality](https://github.com/hihihhi/quant-research-vault/actions/workflows/quality.yml/badge.svg)](https://github.com/hihihhi/quant-research-vault/actions/workflows/quality.yml)
+[![quality](https://github.com/oscar-chw/quant-research-vault/actions/workflows/quality.yml/badge.svg)](https://github.com/oscar-chw/quant-research-vault/actions/workflows/quality.yml)
 
 A local Python pipeline that fetches academic-paper metadata from arXiv (optionally OpenAlex) into SQLite, indexes processed records in ChromaDB, and exposes read-only semantic search through an MCP server. At a 2026-07-30 audit its local, unpublished database held 18,492 paper rows ([query and SHA-256](docs/corpus_audit_snapshot_2026-07-30.json)).
 
