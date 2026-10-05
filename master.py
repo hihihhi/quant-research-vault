@@ -387,7 +387,7 @@ def print_status(progress: dict) -> None:
         f"  Distill quality  : {'OK' if vr.get('ok') else 'NEEDS WORK'} — "
         f"{vr.get('word_count', 0):,} words, {vr.get('topics_covered', '?')} topics"
     )
-    print("\n  Full analysis    : use Claude Code + ANALYSIS_SKILL.md")
+    print("\n  Full analysis    : use Claude Code + docs/analysis-skill.md")
     print("=" * 60)
 
 
@@ -494,7 +494,7 @@ def main() -> None:
             progress["verified"] = True
             save_progress(progress)
             log(
-                "COMPLETE — papers downloaded and distilled. Use ANALYSIS_SKILL.md for full analysis."
+                "COMPLETE — papers downloaded and distilled. Use docs/analysis-skill.md for full analysis."
             )
             print_status(progress)
         else:

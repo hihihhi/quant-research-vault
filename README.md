@@ -2,7 +2,9 @@
 
 [![quality](https://github.com/oscar-chw/quant-research-vault/actions/workflows/quality.yml/badge.svg)](https://github.com/oscar-chw/quant-research-vault/actions/workflows/quality.yml)
 
-A local Python pipeline that fetches academic-paper metadata from arXiv (optionally OpenAlex) into SQLite, indexes processed records in ChromaDB, and exposes read-only semantic search through an MCP server. At a 2026-07-30 audit its local, unpublished database held 18,492 paper rows ([query and SHA-256](docs/corpus_audit_snapshot_2026-07-30.json)).
+A local Python pipeline that fetches academic-paper metadata from arXiv (optionally OpenAlex) into SQLite, indexes processed records in ChromaDB, and exposes read-only semantic search through an MCP server, so an AI assistant can search a quant-finance paper corpus.
+At a 2026-07-30 audit its local, unpublished database held 18,492 paper rows ([what that count rests on](docs/corpus-audit.md)).
+Deduplication, fetch windows, rate-limit backoff, the single-instance MCP lock and search-result mapping pass 5 offline tests.
 
 From upstream metadata to an AI assistant's search: deduplicated into SQLite, written to the vault, indexed in
 ChromaDB, and served read-only over MCP by a single server instance.
@@ -60,47 +62,18 @@ Where in the code: `fetch.py` (`fetch_recent`, `fetch_window`, `_iter_with_retry
 `already_fetched`, `save_paper`), `process.py` (`get_pending`, `mark_processed`), `sync.py` (`already_indexed`,
 `index_paper`), `search_mcp.py` (`_acquire_lock`, `build_server`), `config.yaml`.
 
-**Status:** arXiv-ID deduplication, non-overlapping fetch date windows, rate-limit backoff, the single-instance MCP lock and search-result mapping pass 5 offline tests; CI runs ruff, mypy and pytest.
+## Why this exists
 
-Run the checks with `pytest -q` and see the MCP server's options with `python search_mcp.py --help`; PowerShell and bash steps are in [Run it](#run-it).
+Reading the quant-finance literature from an AI assistant needs a corpus the assistant can search locally: papers
+fetched once, deduplicated, kept on disk, and served read-only by a single server instance.
 
-Implemented with AI coding agents under Oscar's design and review.
+## Approach
 
-## Architecture
-
-- `fetch.py` queries configured arXiv categories and optional OpenAlex; Semantic Scholar is configured but disabled by default. Records are persisted in SQLite using `INSERT OR IGNORE` keyed by paper ID.
-- In the windowed history fetch (`--all-history`, `fetch_window`), arXiv requests make up to 4 attempts. After an HTTP 429 the waits are 60, 120 and 240 seconds before the retries (and 480 seconds before giving up); after an HTTP 500 they are 30, 60 and 90 seconds (and 120 before giving up).
-- `process.py` optionally enriches local records; `sync.py` indexes processed records in ChromaDB and skips IDs already present.
-- `search_mcp.py` provides read-only semantic search and stats over ChromaDB/SQLite, with a temporary PID lock to reject another live MCP instance and clear stale locks.
-- `run.py` orchestrates fetch -> process -> sync; `master.py` coordinates longer, restartable source and distillation stages.
-
-One `search_papers` call, from server start to the text the assistant reads:
-
-```mermaid
-sequenceDiagram
-    participant AI as AI assistant
-    participant S as search_mcp.py
-    participant L as lock file
-    participant C as ChromaDB
-    AI->>S: start the server over stdio
-    S->>L: _acquire_lock reads the PID
-    alt that PID is alive
-        S-->>AI: exit 0, so not retried
-    else no file or a stale PID
-        S->>L: write own PID
-        S->>C: get_collection quant_papers
-    end
-    AI->>S: call_tool search_papers, query, n_results
-    S->>S: n = min(n_results, 10)
-    S->>C: query, query_texts and n
-    C-->>S: documents, metadatas, distances
-    S->>S: score 1 - distance, 500-char excerpt
-    S-->>AI: text with title, id, excerpt
-    Note over S,L: on exit _release_lock deletes it
-```
-
-Where in the code: `search_mcp.py` (`_acquire_lock`, `_release_lock`, `get_collection`, `search_papers`,
-`call_tool` in `build_server`); the lock and result mapping are covered by `test_quality.py`.
+- `fetch.py` queries configured arXiv categories and optional OpenAlex and stores records in SQLite with `INSERT OR IGNORE` keyed by paper ID; the windowed history fetch backs off after HTTP 429 and 500 responses ([waits](docs/architecture.md#what-each-stage-does)).
+- `process.py` writes one vault markdown entry per paper, abstract-only by default; full analysis is optional (Anthropic API key, or Claude Code with [docs/analysis-skill.md](docs/analysis-skill.md)).
+- `sync.py` indexes processed entries in ChromaDB and skips IDs already present.
+- `search_mcp.py` serves five read-only tools (search, recent papers, one paper, alpha ideas, stats) over stdio, with a PID lock that rejects a second live instance ([one search call, step by step](docs/architecture.md#one-search-call)).
+- Design decision: abstract-only indexing is decoupled from optional full-text, model-assisted enrichment, so the corpus is searchable before the slower enrichment stage; the trade-off is that early retrieval quality is limited to metadata and abstracts.
 
 The daily job: `install.py` schedules `run.py` at 06:00, which runs three child processes in order and stops at the
 first that fails. The daily fetch is the last 14 days through the arXiv client's own retries; the 429/500 backoff
@@ -156,51 +129,74 @@ Where in the code: `install.py` (`create_scheduled_task`), `run.py` (`run_step`,
 `fetch.py` (`fetch_recent`, `already_fetched`, `save_paper`), `process.py` (`_process_one`, `summarize`),
 `sync.py` (`main`), `config.yaml` (`days_lookback`).
 
-## The interesting decision
+## Results
 
-The project decouples abstract-only indexing from optional full-text/model-assisted enrichment. This makes a locally retrieved corpus searchable before the slower enrichment stage; the trade-off is that early retrieval quality is limited to metadata and abstracts, while later enrichment requires local files and optional model tooling.
+| What | Result | Evidence |
+| --- | --- | --- |
+| Offline tests | 5 pass: arXiv-ID deduplication, non-overlapping fetch windows, rate-limit backoff, single-instance lock, search-result mapping | [test_quality.py](test_quality.py) |
+| CI | ruff, ruff format, mypy and pytest on every push and pull request | [quality.yml](.github/workflows/quality.yml) |
+| Corpus size | 18,492 paper rows in the local SQLite database at the 2026-07-30 audit; an operational count, not a quality result; not reproducible from this checkout | [docs/corpus-audit.md](docs/corpus-audit.md) |
+| Retrieval quality, trading or predictive results | none claimed; no benchmark | none |
 
-## Provenance
-
-- arXiv and OpenAlex are the configured upstream metadata sources (`config.yaml`, `fetch.py`); their availability, coverage, licenses, and API limits remain upstream concerns.
-- SQLite is the local state store and ChromaDB is the local vector index (`fetch.py`, `sync.py`, `search_mcp.py`).
-- The MCP server is local and read-only with respect to the retrieval interface (`search_mcp.py`).
-- `docs/corpus_audit_snapshot_2026-07-30.json` records `SELECT count(*) FROM papers = 18492` against an ignored 33,161,216-byte SQLite file with SHA-256 `acb1a76ee2bf575fa083c807be39b66b34c040a6b9697a297b1e0dc0a0e7ab13`; the underlying rows are not published.
-- Implemented with AI coding agents (OpenAI Codex, Claude Code) under Oscar Choi's design and review.
-- Research-infrastructure project; last functional change 2026-04-12.
-- Repository license: MIT (see `LICENSE`).
-
-## Run it
-
-```powershell
-python -m venv .venv
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt ruff mypy pytest
-& .\.venv\Scripts\ruff.exe check .
-& .\.venv\Scripts\ruff.exe format --check .
-& .\.venv\Scripts\mypy.exe
-& .\.venv\Scripts\pytest.exe -q
-& .\.venv\Scripts\python.exe run.py --fetch-only --dry-run
-& .\.venv\Scripts\python.exe search_mcp.py --help
-```
+## Quick start
 
 ```bash
-# macOS/Linux (bash): the same steps
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt ruff mypy pytest
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/mypy
-.venv/bin/pytest -q
-.venv/bin/python run.py --fetch-only --dry-run
-.venv/bin/python search_mcp.py --help
+.venv/bin/ruff check . && .venv/bin/mypy   # lint and type checks, as in CI
+.venv/bin/pytest -q                        # expect: 5 passed
+.venv/bin/python run.py --fetch-only --dry-run   # live upstream requests, not persisted
+.venv/bin/python search_mcp.py --help      # the MCP server's options
 ```
 
-The dry run makes live upstream requests but is intended not to persist fetched records. Run `python run.py --help` before any stateful ingestion command.
+The dry run makes live upstream requests but is intended not to persist fetched records; run `python run.py --help`
+before any stateful ingestion command. PowerShell steps are in [docs/running.md](docs/running.md).
 
-## Limitations
+## Project structure
 
-- The 18,492-row audit-time count is an operational row count, not a quality or model-performance result, and its sample status is unknown; the code's `processed` flag means an entry was written, not that analysis is complete. No trading, predictive, retrieval-quality, or benchmark result is claimed.
-- The committed audit snapshot preserves a local row count and source hash, but the corpus, SQLite database, and ChromaDB index are not published; the count, coverage, and retrieval quality are therefore not independently reproducible from this checkout.
-- Upstream API schema, rate-limit, and availability changes can affect ingestion.
+The Python modules sit flat at the root on purpose: imports, tests, CI and the install scripts depend on that layout.
+
+```text
+Pipeline                run.py runs fetch -> process -> sync, each a child process
+  fetch.py              arXiv / OpenAlex metadata into SQLite, deduplicated by paper ID
+  process.py            one vault markdown entry per paper (abstract-only or full)
+  sync.py               indexes processed entries into ChromaDB
+  master.py             longer, restartable build stages (sources, analysis, distillation)
+Search and research
+  search_mcp.py         read-only MCP server over ChromaDB and SQLite (five tools)
+  research.py           command-line search, stats, related papers, export
+Optional full analysis  driven by Claude Code with docs/analysis-skill.md
+  list_pending.py       abstract-only entries still pending, as JSON
+  mark_analyzed.py      records that a paper has been fully analysed
+Setup and checks
+  install.py, install.sh, install.ps1   dependencies, vault folders, MCP registration (install.py: daily job)
+  doctor.py             installation self-check (database, index, MCP registration)
+  test_quality.py       offline tests (pytest)
+config.yaml             sources, categories, profiles, days_lookback
+scripts/                generate-copilot-context.py: a Copilot-compatible summary of the vault
+docs/                   architecture, analysis instructions, corpus audit, run steps
+```
+
+Docs: see [docs/README.md](docs/README.md).
+
+## Limits
+
+- The 18,492-row count is an operational row count, not a quality or model-performance result; the `processed` flag means an entry was written, not that analysis is complete. No trading, predictive, retrieval-quality or benchmark result is claimed.
+- The corpus, SQLite database and ChromaDB index are not published, so the count, coverage and retrieval quality are not independently reproducible from this checkout.
+- Upstream API schema, rate-limit and availability changes can affect ingestion.
 - The PID lock is a local single-instance guard, not a distributed lock.
 - Optional enrichment depends on local files and model/tool configuration; it is not exercised by the clean-clone quality suite.
+- Research-infrastructure project; last functional change 2026-04-12.
+
+## Lessons
+
+- Decoupling abstract-only indexing from enrichment makes a corpus searchable before the slow stage finishes; the price is that early retrieval is only as good as metadata and abstracts.
+- A row count is an operational number, not evidence of quality: committing the query and the file hash is as far as an unpublished database can be checked.
+
+## Credits and licence
+
+- arXiv and OpenAlex are the configured upstream metadata sources (`config.yaml`, `fetch.py`); their availability, coverage, licences and API limits remain upstream concerns.
+- SQLite is the local state store and ChromaDB the local vector index; the MCP server is local and read-only with respect to retrieval.
+- Licence: MIT ([LICENSE](LICENSE)).
+
+Implemented with AI coding agents under Oscar's design and review. The agents were OpenAI Codex and Claude Code.

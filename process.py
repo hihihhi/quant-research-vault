@@ -6,7 +6,7 @@ Two-phase design:
   Phase 1 (--abstract-only): Index all papers instantly using abstracts.
                               Gets 40k papers searchable in ~1-2 hours.
   Phase 2 (ANTHROPIC_API_KEY): Full analysis via Anthropic API.
-                              Or use Claude Code with ANALYSIS_SKILL.md
+                              Or use Claude Code with docs/analysis-skill.md
                               to process papers with multi-agent teams.
 
 Usage:
@@ -17,7 +17,7 @@ Usage:
     python process.py --upgrade                # Re-enrich abstract-only entries
 
 NOTE: subprocess-spawning claude CLI mode removed to prevent zombie Node.js processes.
-For Claude Code analysis, see ANALYSIS_SKILL.md.
+For Claude Code analysis, see docs/analysis-skill.md.
 """
 
 import argparse
@@ -223,7 +223,7 @@ def summarize(paper: dict, pdf_text: str, cfg: dict) -> str:
         "No ANTHROPIC_API_KEY set.\n"
         "Options:\n"
         "  1) Set ANTHROPIC_API_KEY and re-run for direct API access.\n"
-        "  2) Use Claude Code with ANALYSIS_SKILL.md for multi-agent paper analysis\n"
+        "  2) Use Claude Code with docs/analysis-skill.md for multi-agent paper analysis\n"
         "     (no subprocess spawning, no zombie Node.js processes).\n"
         "  3) Run with --abstract-only for Phase 1 indexing (no Claude needed)."
     )

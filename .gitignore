@@ -40,3 +40,6 @@ models/local/
 *.zip
 *.7z
 *.bin
+
+# Personal AI-assistant session state (not part of the project)
+.claude/
