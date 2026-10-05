@@ -10,8 +10,8 @@ Usage:
     python scripts/generate-copilot-context.py
 """
 
-import os
 import json
+import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
