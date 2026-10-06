@@ -321,3 +321,29 @@ def test_install_sh_expands_tilde_in_vault_path(tmp_path):
     assert result.returncode == 0, result.stderr
     assert (home / "Documents" / "ClaudeVault" / "research").is_dir()
     assert not (work / "~").exists()
+
+
+def _broken_md_links(root: Path) -> list[str]:
+    import re
+
+    broken = []
+    for md in sorted(root.rglob("*.md")):
+        if any(part in {".git", ".venv", "node_modules"} for part in md.parts):
+            continue
+        text = re.sub(r"```.*?```", "", md.read_text(encoding="utf-8"), flags=re.S)
+        for target in re.findall(r"\[[^\]]*\]\(([^)\s]+)\)", text):
+            if re.match(r"[a-z][a-z0-9+.-]*:|#", target, re.I):
+                continue  # external URL or same-page anchor
+            if not (md.parent / target.split("#")[0]).exists():
+                broken.append(f"{md.relative_to(root)} -> {target}")
+    return broken
+
+
+def test_markdown_link_check_flags_a_missing_file(tmp_path):
+    (tmp_path / "a.md").write_text("[ok](b.md) [bad](nope.md#x)", encoding="utf-8")
+    (tmp_path / "b.md").write_text("[web](https://example.test) [top](#t)")
+    assert _broken_md_links(tmp_path) == ["a.md -> nope.md#x"]
+
+
+def test_repo_markdown_relative_links_resolve():
+    assert _broken_md_links(Path(__file__).parent) == []
