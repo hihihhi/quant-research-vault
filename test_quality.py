@@ -153,3 +153,38 @@ def test_installer_adds_server_and_keeps_existing_claude_json_settings(
     data = json.loads(claude_json.read_text(encoding="utf-8"))
     assert data["theme"] == "dark"
     assert set(data["mcpServers"]) == {"other", "quant-research"}
+
+
+def test_arxiv_versions_map_to_one_id():
+    for entry_id in (
+        "http://arxiv.org/abs/2401.12345",
+        "http://arxiv.org/abs/2401.12345v1",
+        "http://arxiv.org/abs/2401.12345v12",
+    ):
+        assert fetch.arxiv_id_from_entry(entry_id) == "2401.12345"
+    assert fetch.arxiv_id_from_entry("http://arxiv.org/abs/q-fin/0501001v2") == (
+        "q-fin/0501001"
+    )
+
+
+def test_revised_paper_is_stored_once(tmp_path):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    def result(version: str):
+        return SimpleNamespace(
+            entry_id=f"http://arxiv.org/abs/2401.12345{version}",
+            title="Example",
+            authors=[],
+            summary="A test paper.",
+            categories=["q-fin.ST"],
+            published=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            pdf_url="https://example.test/paper.pdf",
+        )
+
+    conn = fetch.init_db(str(tmp_path / "papers.sqlite"))
+    fetch.save_paper(conn, fetch._to_dict(result("v1")))
+    fetch.save_paper(conn, fetch._to_dict(result("v2")))
+    assert fetch.count_total(conn) == 1
+    assert fetch.already_fetched(conn, "2401.12345")
+    conn.close()

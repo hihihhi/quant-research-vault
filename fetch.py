@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -155,9 +156,18 @@ def matches_keywords(paper: arxiv.Result, keywords: list[str]) -> bool:
     return any(kw.lower() in text for kw in keywords)
 
 
+def arxiv_id_from_entry(entry_id: str) -> str:
+    """'http://arxiv.org/abs/2401.12345v2' -> '2401.12345'.
+
+    The version suffix is dropped so a revised paper keeps one row, one note and one
+    index entry instead of a duplicate per version.
+    """
+    return re.sub(r"v\d+$", "", entry_id.split("/abs/")[-1])
+
+
 def _to_dict(r: arxiv.Result) -> dict:
     return {
-        "arxiv_id": r.entry_id.split("/abs/")[-1],
+        "arxiv_id": arxiv_id_from_entry(r.entry_id),
         "title": r.title.strip(),
         "authors": [a.name for a in r.authors[:5]],
         "abstract": r.summary.strip(),
@@ -516,7 +526,7 @@ def fetch_window(
         )
         count = 0
         for r in _iter_with_retry(client, search):
-            pid = r.entry_id.split("/abs/")[-1]
+            pid = arxiv_id_from_entry(r.entry_id)
             if pid not in seen:
                 if not keywords or matches_keywords(r, keywords):
                     seen.add(pid)
@@ -562,7 +572,7 @@ def fetch_recent(cfg: dict, days_override: int | None = None) -> list[dict]:
         for r in client.results(search):
             if r.published < cutoff:
                 break
-            pid = r.entry_id.split("/abs/")[-1]
+            pid = arxiv_id_from_entry(r.entry_id)
             if pid not in seen:
                 if not keywords or matches_keywords(r, keywords):
                     seen.add(pid)
