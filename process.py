@@ -425,9 +425,11 @@ def main() -> None:
 
     counter = [0, len(papers)]  # [done, total]
 
+    failed = 0
     if workers == 1:
         for paper in papers:
-            _process_one(paper, cfg, abstract_only, conn, counter)
+            if not _process_one(paper, cfg, abstract_only, conn, counter):
+                failed += 1
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
@@ -435,10 +437,15 @@ def main() -> None:
                 for p in papers
             }
             for f in as_completed(futures):
-                f.result()  # surface exceptions
+                if not f.result():  # also surfaces exceptions
+                    failed += 1
 
     conn.close()
     print(f"\nDone. Processed {counter[0]}/{len(papers)} papers.")
+    if failed == len(papers):
+        # A missing API key or anthropic package fails every paper; exiting 0 here let
+        # run.py report "Pipeline complete." while nothing was ever analysed.
+        sys.exit(f"process.py: all {failed} papers failed; nothing was processed.")
 
 
 if __name__ == "__main__":

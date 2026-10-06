@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import date
 
 import pytest
 
 import fetch
 import install
+import process
 import search_mcp
 
 
@@ -188,3 +190,45 @@ def test_revised_paper_is_stored_once(tmp_path):
     assert fetch.count_total(conn) == 1
     assert fetch.already_fetched(conn, "2401.12345")
     conn.close()
+
+
+def _processing_setup(monkeypatch, tmp_path, n_papers):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        f'vault_path: "{tmp_path / "vault"}"\nresearch_dir: research\n'
+        f'db_path: "{tmp_path / "papers.sqlite"}"\nclaude_model: m\n'
+        "max_pdf_chars: 100\nfetch_pdf: false\n",
+        encoding="utf-8",
+    )
+    conn = fetch.init_db(str(tmp_path / "papers.sqlite"))
+    for i in range(n_papers):
+        fetch.save_paper(
+            conn,
+            {
+                "arxiv_id": f"2401.0000{i}",
+                "title": "Example",
+                "authors": ["A"],
+                "abstract": "A test paper.",
+                "categories": ["q-fin.ST"],
+                "published": "2024-01-01T00:00:00+00:00",
+                "pdf_url": "https://example.test/p.pdf",
+            },
+        )
+    conn.close()
+    monkeypatch.setattr(
+        sys, "argv", ["process.py", "--config", str(cfg_path), "--workers", "1"]
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+def test_full_analysis_exits_nonzero_when_every_paper_fails(monkeypatch, tmp_path):
+    _processing_setup(monkeypatch, tmp_path, 2)
+    with pytest.raises(SystemExit) as exc:
+        process.main()  # no API key: summarize() raises for every paper
+    assert exc.value.code not in (0, None)
+
+
+def test_abstract_only_run_still_exits_zero(monkeypatch, tmp_path):
+    _processing_setup(monkeypatch, tmp_path, 2)
+    monkeypatch.setattr(sys, "argv", [*sys.argv, "--abstract-only"])
+    process.main()  # returns normally: exit status 0
