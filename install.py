@@ -15,8 +15,10 @@ Usage:
 """
 
 import json
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -144,9 +146,17 @@ def wire_mcp(cfg: dict) -> None:
     if claude_json_path.exists():
         try:
             data = json.loads(claude_json_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            warn(".claude.json is malformed — creating a new one.")
-            data = {}
+        except json.JSONDecodeError as exc:
+            # Writing a fresh file here would drop every other MCP server, project and
+            # setting the user has. Keep a copy, leave the original in place, and stop.
+            backup = claude_json_path.with_name(
+                f".claude.json.malformed-{time.strftime('%Y%m%d-%H%M%S')}.bak"
+            )
+            shutil.copy2(claude_json_path, backup)
+            fail(
+                f"{claude_json_path} is not valid JSON ({exc}). It was left untouched and "
+                f"copied to {backup}. Fix or restore it, then re-run the installer."
+            )
     else:
         data = {}
 

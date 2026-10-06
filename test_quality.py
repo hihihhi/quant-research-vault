@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
+import pytest
+
 import fetch
+import install
 import search_mcp
 
 
@@ -112,3 +116,40 @@ def test_mcp_db_paths_resolve_next_to_config_not_cwd(monkeypatch, tmp_path):
     conn.close()
     assert cfg["chroma_path"] == str(pkg / ".db" / "chroma")
     assert not (elsewhere / ".db").exists()
+
+
+def _home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return tmp_path / ".claude.json"
+
+
+def test_installer_refuses_malformed_claude_json_and_keeps_a_backup(
+    monkeypatch, tmp_path
+):
+    claude_json = _home(monkeypatch, tmp_path)
+    broken = '{"mcpServers": {"other": {"command": "x"}}, "projects": {},}'
+    claude_json.write_text(broken, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        install.wire_mcp({"mcp_server_name": "quant-research"})
+
+    assert exc.value.code != 0
+    assert claude_json.read_text(encoding="utf-8") == broken
+    backups = list(tmp_path.glob(".claude.json.malformed-*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == broken
+
+
+def test_installer_adds_server_and_keeps_existing_claude_json_settings(
+    monkeypatch, tmp_path
+):
+    claude_json = _home(monkeypatch, tmp_path)
+    claude_json.write_text(
+        '{"theme": "dark", "mcpServers": {"other": {"command": "x"}}}',
+        encoding="utf-8",
+    )
+    install.wire_mcp({"mcp_server_name": "quant-research"})
+    data = json.loads(claude_json.read_text(encoding="utf-8"))
+    assert data["theme"] == "dark"
+    assert set(data["mcpServers"]) == {"other", "quant-research"}

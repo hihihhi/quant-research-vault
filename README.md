@@ -4,7 +4,7 @@
 
 A local Python pipeline that fetches academic-paper metadata from arXiv (optionally OpenAlex) into SQLite, indexes processed records in ChromaDB, and exposes read-only semantic search through an MCP server, so an AI assistant can search a quant-finance paper corpus.
 At a 2026-07-30 audit its local, unpublished database held 18,492 paper rows ([what that count rests on](docs/corpus-audit.md)).
-Deduplication, fetch windows, rate-limit backoff, the single-instance MCP lock and search-result mapping pass 6 offline tests.
+Deduplication, fetch windows, rate-limit backoff, the single-instance MCP lock and search-result mapping pass 8 offline tests.
 
 From upstream metadata to an AI assistant's search: deduplicated into SQLite, written to the vault, indexed in
 ChromaDB, and served read-only over MCP by a single server instance.
@@ -133,7 +133,7 @@ Where in the code: `install.py` (`create_scheduled_task`), `run.py` (`run_step`,
 
 | What | Result | Evidence |
 | --- | --- | --- |
-| Offline tests | 6 pass: arXiv-ID deduplication, non-overlapping fetch windows, rate-limit backoff, single-instance lock, search-result mapping, MCP database path | [test_quality.py](test_quality.py) |
+| Offline tests | 8 pass: arXiv-ID deduplication, non-overlapping fetch windows, rate-limit backoff, single-instance lock, search-result mapping, MCP database path, installer refusing a malformed `~/.claude.json` | [test_quality.py](test_quality.py) |
 | CI | ruff, ruff format, mypy and pytest on every push and pull request | [quality.yml](.github/workflows/quality.yml) |
 | Corpus size | 18,492 paper rows in the local SQLite database at the 2026-07-30 audit; an operational count, not a quality result; not reproducible from this checkout | [docs/corpus-audit.md](docs/corpus-audit.md) |
 | Retrieval quality, trading or predictive results | none claimed; no benchmark | none |
@@ -144,10 +144,13 @@ Where in the code: `install.py` (`create_scheduled_task`), `run.py` (`run_step`,
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt ruff mypy pytest
 .venv/bin/ruff check . && .venv/bin/mypy   # lint and type checks, as in CI
-.venv/bin/pytest -q                        # expect: 6 passed
+.venv/bin/pytest -q                        # expect: 8 passed
 .venv/bin/python run.py --fetch-only --dry-run   # live upstream requests, not persisted
 .venv/bin/python search_mcp.py --help      # the MCP server's options
 ```
+
+`install.py` registers the MCP server in `~/.claude.json`. If that file is not valid JSON the installer stops, leaves it
+untouched and copies it to `.claude.json.malformed-<timestamp>.bak` next to it; fix or restore it and re-run.
 
 The dry run makes live upstream requests but is intended not to persist fetched records; run `python run.py --help`
 before any stateful ingestion command. PowerShell steps are in [docs/running.md](docs/running.md).
