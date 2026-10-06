@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import sys
 from datetime import date
+from pathlib import Path
 
 import pytest
+import yaml
 
 import fetch
 import install
+import master
 import process
 import search_mcp
 
@@ -232,3 +235,58 @@ def test_abstract_only_run_still_exits_zero(monkeypatch, tmp_path):
     _processing_setup(monkeypatch, tmp_path, 2)
     monkeypatch.setattr(sys, "argv", [*sys.argv, "--abstract-only"])
     process.main()  # returns normally: exit status 0
+
+
+def _master_in(monkeypatch, tmp_path, config_text=None):
+    real = Path(__file__).parent / "config.yaml"
+    (tmp_path / "config.yaml").write_text(
+        config_text if config_text is not None else real.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(master, "ROOT", tmp_path)
+    monkeypatch.setattr(master, "PROGRESS_FILE", tmp_path / ".db" / "p.json")
+    monkeypatch.setattr(master, "LOG_FILE", tmp_path / "master.log")
+    monkeypatch.setattr(master, "paper_count", lambda: 0)
+    return dict(master._DEFAULT_PROGRESS)
+
+
+def _ss_enabled(tmp_path):
+    cfg = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    return cfg["extra_sources"]["semantic_scholar"]["enabled"]
+
+
+def test_master_enables_semantic_scholar_for_the_step_then_restores(
+    monkeypatch, tmp_path
+):
+    progress = _master_in(monkeypatch, tmp_path)
+    assert _ss_enabled(tmp_path) is False  # the shipped config.yaml line
+    seen = []
+
+    def fake_run_step(cmd, timeout=0, label=""):
+        seen.append(_ss_enabled(tmp_path))
+        return 0
+
+    monkeypatch.setattr(master, "run_step", fake_run_step)
+    assert master.phase3_semantic_scholar(progress)
+    assert seen == [True]  # fetch.py --fetch-ss would have seen enabled: true
+    assert _ss_enabled(tmp_path) is False
+    assert progress["ss_done"] is True
+
+
+def test_master_does_not_mark_semantic_scholar_done_when_step_fails(
+    monkeypatch, tmp_path
+):
+    progress = _master_in(monkeypatch, tmp_path)
+    monkeypatch.setattr(master, "run_step", lambda *a, **k: 1)
+    with pytest.raises(SystemExit):
+        master.phase3_semantic_scholar(progress)
+    assert progress["ss_done"] is False
+    assert _ss_enabled(tmp_path) is False  # config restored even on failure
+
+
+def test_master_refuses_to_mark_done_when_config_key_is_missing(monkeypatch, tmp_path):
+    progress = _master_in(monkeypatch, tmp_path, "extra_sources: {}\n")
+    monkeypatch.setattr(master, "run_step", lambda *a, **k: 0)
+    with pytest.raises(SystemExit):
+        master.phase3_semantic_scholar(progress)
+    assert progress["ss_done"] is False

@@ -22,6 +22,7 @@ Usage:
 
 import argparse
 import json
+import re
 import signal
 import sqlite3
 import subprocess
@@ -169,45 +170,66 @@ def phase1_wait(progress: dict) -> bool:
     return False
 
 
-# ── Phase 2: OpenAlex fetch ───────────────────────────────────────────────────
+# ── Phases 2 and 3: extra sources ─────────────────────────────────────────────
+
+
+def _set_source_enabled(raw: str, source: str, value: bool) -> tuple[str, bool] | None:
+    """Set extra_sources.<source>.enabled in config.yaml text; keep comments and spacing.
+
+    Returns (new_text, previous_value), or None when the key is not there. The old code
+    matched one exact comment-and-spacing string, which no longer matched config.yaml, so
+    the source was never enabled and its phase was still marked done.
+    """
+    pattern = re.compile(
+        rf"(?m)^([ \t]+{source}:[ \t]*\n[ \t]+enabled:[ \t]*)(true|false)"
+    )
+    match = pattern.search(raw)
+    if match is None:
+        return None
+    new = pattern.sub(lambda m: m.group(1) + str(value).lower(), raw, count=1)
+    return new, match.group(2) == "true"
+
+
+def _run_enabled_source(source: str, cmd: list[str], label: str) -> None:
+    """Run cmd with the source enabled in config.yaml, then restore the file.
+
+    Exits (so the phase is not marked done and a re-run retries it) if the toggle cannot
+    be applied or the step fails.
+    """
+    cfg_path = ROOT / "config.yaml"
+    raw = cfg_path.read_text(encoding="utf-8")
+    toggled = _set_source_enabled(raw, source, True)
+    if toggled is None:
+        log(f"ERROR: extra_sources.{source}.enabled not found in config.yaml")
+        sys.exit(f"master.py: cannot enable {source}: config.yaml format changed")
+    enabled_raw, was_enabled = toggled
+    if not was_enabled:
+        cfg_path.write_text(enabled_raw, encoding="utf-8")
+        log(f"{source} enabled in config.yaml")
+    try:
+        rc = run_step(cmd, timeout=7200, label=label)
+    finally:
+        if not was_enabled:
+            # Restore only this key, in case config.yaml was edited meanwhile.
+            current = cfg_path.read_text(encoding="utf-8")
+            restored = _set_source_enabled(current, source, False)
+            if restored is not None:
+                cfg_path.write_text(restored[0], encoding="utf-8")
+            log(f"{source} disabled in config.yaml (restored)")
+    if rc != 0:
+        sys.exit(f"master.py: {label} failed (rc={rc}); phase not marked done")
 
 
 def phase2_openalex(progress: dict) -> bool:
     if progress["openalex_done"]:
         return True
 
-    # Temporarily enable OpenAlex in config
-    cfg_path = ROOT / "config.yaml"
-    raw = cfg_path.read_text(encoding="utf-8")
-    if "enabled: false          # integrated into --all-history windowed fetch" in raw:
-        raw_oa = raw.replace(
-            "enabled: false          # integrated into --all-history windowed fetch",
-            "enabled: true           # integrated into --all-history windowed fetch",
-        )
-        cfg_path.write_text(raw_oa, encoding="utf-8")
-        log("OpenAlex enabled in config.yaml")
-        oa_enabled = True
-    else:
-        oa_enabled = False
-        log("OpenAlex already enabled or config format changed — proceeding")
-
     before = paper_count()
-    run_step(
+    _run_enabled_source(
+        "openalex",
         [sys.executable, str(ROOT / "run.py"), "--all-history", "--abstract-only"],
-        timeout=7200,
-        label="OpenAlex all-history",
+        "OpenAlex all-history",
     )
-
-    # Restore config: disable OpenAlex
-    if oa_enabled:
-        raw2 = cfg_path.read_text(encoding="utf-8")
-        raw2 = raw2.replace(
-            "enabled: true           # integrated into --all-history windowed fetch",
-            "enabled: false          # integrated into --all-history windowed fetch",
-        )
-        cfg_path.write_text(raw2, encoding="utf-8")
-        log("OpenAlex disabled in config.yaml (restored)")
-
     after = paper_count()
     log(f"OpenAlex fetch done. Added {after - before} papers. DB: {after}")
     progress["openalex_done"] = True
@@ -222,38 +244,12 @@ def phase3_semantic_scholar(progress: dict) -> bool:
     if progress["ss_done"]:
         return True
 
-    # Temporarily enable SS in config
-    cfg_path = ROOT / "config.yaml"
-    raw = cfg_path.read_text(encoding="utf-8")
-    if "enabled: false          # run separately: python fetch.py --fetch-ss" in raw:
-        raw_ss = raw.replace(
-            "enabled: false          # run separately: python fetch.py --fetch-ss",
-            "enabled: true           # run separately: python fetch.py --fetch-ss",
-        )
-        cfg_path.write_text(raw_ss, encoding="utf-8")
-        log("Semantic Scholar enabled in config.yaml")
-        ss_enabled = True
-    else:
-        ss_enabled = False
-        log("Semantic Scholar already enabled or config format changed")
-
     before = paper_count()
-    run_step(
+    _run_enabled_source(
+        "semantic_scholar",
         [sys.executable, str(ROOT / "fetch.py"), "--fetch-ss"],
-        timeout=7200,
-        label="Semantic Scholar bulk import",
+        "Semantic Scholar bulk import",
     )
-
-    # Restore config
-    if ss_enabled:
-        raw2 = cfg_path.read_text(encoding="utf-8")
-        raw2 = raw2.replace(
-            "enabled: true           # run separately: python fetch.py --fetch-ss",
-            "enabled: false          # run separately: python fetch.py --fetch-ss",
-        )
-        cfg_path.write_text(raw2, encoding="utf-8")
-        log("Semantic Scholar disabled in config.yaml (restored)")
-
     after = paper_count()
     log(f"SS import done. Added {after - before} papers. DB: {after}")
     progress["ss_done"] = True
