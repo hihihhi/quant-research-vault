@@ -90,3 +90,25 @@ def test_search_papers_maps_chroma_response():
             "summary_excerpt": "Abstract",
         }
     ]
+
+
+def test_mcp_db_paths_resolve_next_to_config_not_cwd(monkeypatch, tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "config.yaml").write_text(
+        'vault_path: "~/v"\ndb_path: ".db/papers.sqlite"\nchroma_path: ".db/chroma"\n',
+        encoding="utf-8",
+    )
+    (pkg / ".db").mkdir()
+    fetch.init_db(str(pkg / ".db" / "papers.sqlite")).close()
+    elsewhere = tmp_path / "user-project"
+    elsewhere.mkdir()
+    monkeypatch.setattr(search_mcp, "CONFIG_PATH", pkg / "config.yaml")
+    monkeypatch.chdir(elsewhere)
+
+    cfg = search_mcp.load_config()
+    conn = search_mcp.get_db(cfg)
+    assert conn.execute("SELECT COUNT(*) FROM papers").fetchone() == (0,)
+    conn.close()
+    assert cfg["chroma_path"] == str(pkg / ".db" / "chroma")
+    assert not (elsewhere / ".db").exists()

@@ -88,6 +88,10 @@ def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     cfg["vault_path"] = str(Path(cfg["vault_path"]).expanduser())
+    # Claude Code starts this server from the user's project folder, so ".db/..." must be
+    # anchored to the config file, not the cwd, or the search runs on an empty index.
+    for key in ("db_path", "chroma_path"):
+        cfg[key] = str(CONFIG_PATH.parent / Path(cfg[key]).expanduser())
     return cfg
 
 
