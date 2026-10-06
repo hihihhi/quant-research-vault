@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -290,3 +292,32 @@ def test_master_refuses_to_mark_done_when_config_key_is_missing(monkeypatch, tmp
     with pytest.raises(SystemExit):
         master.phase3_semantic_scholar(progress)
     assert progress["ss_done"] is False
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="needs bash")
+def test_install_sh_expands_tilde_in_vault_path(tmp_path):
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    stubs = tmp_path / "stubs"
+    for d in (home, work, stubs):
+        d.mkdir()
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
+    pip = stubs / "pip"
+    pip.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pip.chmod(0o755)
+    env = {
+        "HOME": str(home),
+        "PATH": f"{stubs}:{Path(sys.executable).parent}:/usr/bin:/bin",
+    }
+    root = Path(__file__).parent
+    result = subprocess.run(
+        ["bash", str(root / "install.sh")],
+        cwd=work,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (home / "Documents" / "ClaudeVault" / "research").is_dir()
+    assert not (work / "~").exists()

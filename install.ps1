@@ -18,7 +18,8 @@ if ($uv) {
 }
 
 # ── 2. Create vault research directory ───────────────────────────────────────
-$vaultPath = python -c "import yaml; print(yaml.safe_load(open(r'$RepoDir\config.yaml'))['vault_path'])"
+# expanduser: config.yaml says "~/Documents/...", which New-Item would take as a literal folder
+$vaultPath = python -c "import os, yaml; print(os.path.expanduser(yaml.safe_load(open(r'$RepoDir\config.yaml'))['vault_path']))"
 $researchDir = "$vaultPath\research"
 New-Item -ItemType Directory -Force -Path $researchDir | Out-Null
 Write-Host "Vault research directory: $researchDir"

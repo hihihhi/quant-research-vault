@@ -20,7 +20,8 @@ else
 fi
 
 # ── 2. Create vault research directory ───────────────────────────────────────
-VAULT_PATH=$(python3 -c "import yaml; print(yaml.safe_load(open('$REPO_DIR/config.yaml'))['vault_path'])")
+# expanduser: config.yaml says "~/Documents/...", and a quoted ~ is not expanded by mkdir
+VAULT_PATH=$(python3 -c "import os, yaml; print(os.path.expanduser(yaml.safe_load(open('$REPO_DIR/config.yaml'))['vault_path']))")
 RESEARCH_DIR="$VAULT_PATH/research"
 mkdir -p "$RESEARCH_DIR"
 echo "Vault research directory: $RESEARCH_DIR"
